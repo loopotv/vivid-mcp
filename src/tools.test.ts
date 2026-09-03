@@ -47,8 +47,8 @@ describe('vivid-mcp tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_video', 'vivid_get_asset', 'vivid_job_status',
-      'vivid_list_assets', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects', 'vivid_share_asset',
-      'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects',
+      'vivid_render_project', 'vivid_render_status', 'vivid_share_asset', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -118,6 +118,23 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_share_asset', arguments: { assetId: 'a1', public: true } })));
     expect(out).toEqual({ id: 'a1', favorite: false, public: true, publicUrl: 'https://api.test/api/public/assets/tok123' });
+  });
+
+  it('vivid_render_project enqueues a job and returns the browser URL without opening it', async () => {
+    routes.set('POST /api/render-jobs', (init) => {
+      expect(JSON.parse(init.body as string)).toEqual({ projectAssetId: 'p1', name: 'spot' });
+      return { status: 201, body: { success: true, data: { id: 'r1', status: 'queued', projectAssetId: 'p1', executor: null, progress: 0, options: { name: 'spot' }, outputAssetId: null, error: null, openUrl: 'https://vividai.tv/tools/editor?render=r1', createdAt: 'now' } } };
+    });
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_render_project', arguments: { projectAssetId: 'p1', name: 'spot' } })));
+    expect(out).toMatchObject({ renderJobId: 'r1', status: 'queued', openUrl: 'https://vividai.tv/tools/editor?render=r1', opened: false });
+  });
+
+  it('vivid_render_status reports the finished job with an absolute download URL', async () => {
+    routes.set('GET /api/render-jobs/r1', () => ({ body: { success: true, data: { id: 'r1', status: 'completed', projectAssetId: 'p1', executor: 'browser', progress: 100, options: {}, outputAssetId: 'v9', downloadUrl: '/api/assets/v9/download', error: null, openUrl: 'u', createdAt: 'now' } } }));
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_render_status', arguments: { renderJobId: 'r1' } })));
+    expect(out).toMatchObject({ status: 'completed', progress: 100, outputAssetId: 'v9', downloadUrl: 'https://api.test/api/assets/v9/download' });
   });
 
   it('surfaces API errors as tool errors with a hint for 401', async () => {

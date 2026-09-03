@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -41,6 +42,25 @@ interface VideoGenResult {
 
 interface JobStatus {
   jobId: string; status: string; assetId?: string; downloadUrl?: string; error?: string; taskId?: string;
+}
+
+interface RenderJob {
+  id: string; status: 'queued' | 'rendering' | 'completed' | 'failed' | 'cancelled'; projectAssetId: string;
+  executor: string | null; progress: number; options: { name?: string }; outputAssetId: string | null;
+  downloadUrl?: string; error: string | null; openUrl: string; createdAt: string;
+}
+
+/** Open a URL in the default browser (best effort, never throws). */
+function openInBrowser(url: string): boolean {
+  try {
+    const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
+      : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+      : ['xdg-open', [url]];
+    const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch { return false; }
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -399,5 +419,62 @@ export function registerTools(server: McpServer, client: VividClient): void {
   }, guarded(async () => {
     const { data } = await client.get<Array<Record<string, unknown>>>('/api/projects');
     return json(data.map((p) => ({ id: p.id, name: p.name, brandName: p.brand_name, status: p.status, createdAt: p.created_at })));
+  }));
+
+  // ── Video editor: projects + render queue ────────────────────────────────
+
+  server.registerTool('vivid_list_editor_projects', {
+    title: 'List video editor projects',
+    description: 'List the saved video-editor projects (timelines) of the account. Use the id with vivid_render_project.',
+    inputSchema: {
+      limit: z.number().int().min(1).max(100).default(30),
+    },
+    annotations: { readOnlyHint: true },
+  }, guarded(async ({ limit }) => {
+    const { data } = await client.get<Asset[]>('/api/assets', { type: 'script', limit });
+    return json(data.map((a) => ({
+      id: a.id, name: a.filename.replace(/\.json$/, ''), createdAt: a.created_at,
+      editUrl: `${client.apiUrl.includes('vividoai') ? 'https://vividai.tv' : client.apiUrl}/tools/editor?project=${a.id}`,
+    })));
+  }));
+
+  server.registerTool('vivid_render_project', {
+    title: 'Render editor project',
+    description: 'Queue a render (MP4 export) of a saved video-editor project. VIVID renders in the browser: the job returns an `openUrl` — open it (or pass openBrowser=true to open it automatically on this machine) and the editor renders, uploads the MP4 to the gallery and marks the job done. Poll with vivid_render_status. Requires being logged in on vividai.tv in that browser.',
+    inputSchema: {
+      projectAssetId: z.string().describe('Editor project id from vivid_list_editor_projects.'),
+      name: z.string().optional().describe('File name for the rendered video (without extension).'),
+      openBrowser: z.boolean().default(false).describe('Open the render URL in the default browser of this machine.'),
+      wait: z.boolean().default(false).describe('Wait for completion (polls up to timeoutSec).'),
+      timeoutSec: z.number().int().min(30).max(1800).default(600),
+    },
+  }, guarded(async (a) => {
+    const { data: job } = await client.post<RenderJob>('/api/render-jobs', { projectAssetId: a.projectAssetId, name: a.name });
+    const opened = a.openBrowser ? openInBrowser(job.openUrl) : false;
+    if (!a.wait) {
+      return json({ renderJobId: job.id, status: job.status, openUrl: job.openUrl, opened, hint: opened
+        ? 'The editor is rendering in your browser — poll vivid_render_status.'
+        : 'Open openUrl in a browser logged into vividai.tv to run the render, then poll vivid_render_status.' });
+    }
+    const deadline = Date.now() + a.timeoutSec * 1000;
+    let last = job;
+    while (Date.now() < deadline) {
+      await sleep(5000);
+      last = (await client.get<RenderJob>(`/api/render-jobs/${job.id}`)).data;
+      if (last.status === 'completed' || last.status === 'failed' || last.status === 'cancelled') break;
+    }
+    return json({ renderJobId: last.id, status: last.status, progress: last.progress, outputAssetId: last.outputAssetId,
+      downloadUrl: abs(last.downloadUrl), error: last.error, openUrl: last.openUrl, opened });
+  }));
+
+  server.registerTool('vivid_render_status', {
+    title: 'Render job status',
+    description: 'Status of a render job created with vivid_render_project: queued, rendering (with progress), completed (with the output asset and download URL) or failed.',
+    inputSchema: { renderJobId: z.string() },
+    annotations: { readOnlyHint: true },
+  }, guarded(async ({ renderJobId }) => {
+    const { data: j } = await client.get<RenderJob>(`/api/render-jobs/${renderJobId}`);
+    return json({ renderJobId: j.id, status: j.status, progress: j.progress, executor: j.executor, projectAssetId: j.projectAssetId,
+      outputAssetId: j.outputAssetId, downloadUrl: abs(j.downloadUrl), error: j.error, openUrl: j.openUrl, createdAt: j.createdAt });
   }));
 }
