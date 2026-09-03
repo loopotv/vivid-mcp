@@ -1,0 +1,51 @@
+{
+  "name": "vivid-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for VIVID (vividai.tv): generate images and videos, browse your assets and jobs from Claude, Cursor or any MCP client.",
+  "type": "module",
+  "bin": {
+    "vivid-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "prepare": "npm run build",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "vivid",
+    "ai",
+    "image-generation",
+    "video-generation",
+    "claude"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/loopotv/vivid-mcp.git"
+  },
+  "homepage": "https://vividai.tv",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}
