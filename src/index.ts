@@ -7,7 +7,7 @@ import { registerTools } from './tools.js';
 const apiKey = process.env.VIVID_API_KEY;
 if (!apiKey) {
   console.error('vivid-mcp: VIVID_API_KEY is not set. Create an API key on https://vividai.tv/settings and export it, e.g.\n' +
-    '  "env": { "VIVID_API_KEY": "vivid_…" }\nin your MCP client configuration.');
+    '  "env": { "VIVID_API_KEY": "vk_…" }\nin your MCP client configuration.');
   process.exit(1);
 }
 
