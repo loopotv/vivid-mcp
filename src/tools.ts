@@ -175,12 +175,14 @@ export function registerTools(server: McpServer, client: VividClient): void {
     title: 'List AI models',
     description: 'List the AI models available to this account with pricing (credits) and capabilities. Use the returned `slug` as the `model` argument of vivid_generate_image / vivid_generate_video. Video models expose durations, resolutions, aspect ratios and what they support (startFrame, endFrame, reference, audio…).',
     inputSchema: {
-      type: z.enum(['image', 'video']).describe('Which catalog to list.'),
+      type: z.enum(['image', 'video']).optional().describe('Which catalog to list. Omit to get both.'),
     },
     annotations: { readOnlyHint: true },
   }, guarded(async ({ type }) => {
-    const { data } = await client.get<AiModel[]>('/api/ai/models', { type });
-    return json(data.map(summariseModel));
+    const list = async (t: 'image' | 'video') => (await client.get<AiModel[]>('/api/ai/models', { type: t })).data.map(summariseModel);
+    if (type) return json(await list(type));
+    const [image, video] = await Promise.all([list('image'), list('video')]);
+    return json({ image, video });
   }));
 
   server.registerTool('vivid_generate_image', {

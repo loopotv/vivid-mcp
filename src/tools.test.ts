@@ -77,6 +77,21 @@ describe('vivid-mcp tools', () => {
     expect(out[0].supports).toEqual(['startFrame', 'reference']);
   });
 
+  it('vivid_list_models without type returns both catalogs', async () => {
+    routes.set('GET /api/ai/models', (_i, url) => {
+      const type = url.searchParams.get('type');
+      return { body: { success: true, data: [{
+        slug: type === 'image' ? 'z-image-turbo' : 'kling-o3', display_name: 'x', provider: 'wavespeed', type, speed: 'fast',
+        credits_per_use: 1, credits_per_second: 8, tier_access: '["pro"]', description: null, capabilities: {},
+      }] } };
+    });
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_list_models', arguments: {} })));
+    expect(out.image[0]).toMatchObject({ slug: 'z-image-turbo', creditsPerImage: 1 });
+    expect(out.video[0]).toMatchObject({ slug: 'kling-o3', creditsPerSecond: 8 });
+    expect(calls.filter((c) => c.path === '/api/ai/models')).toHaveLength(2);
+  });
+
   it('vivid_generate_image posts the request, polls each job and returns absolute download URLs', async () => {
     routes.set('POST /api/ai/generate-image-v2', () => ({ status: 202, body: { success: true, data: { jobId: 'j1', status: 'processing', jobIds: ['j1', 'j2'], creditsRemaining: 90 } } }));
     let polls = 0;
