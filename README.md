@@ -29,7 +29,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 ### Claude Code
 
 ```bash
-claude mcp add vivid -e VIVID_API_KEY=vk_xxx -- npx -y github:loopotv/vivid-mcp
+claude mcp add vivid -e VIVID_API_KEY=vk_xxx -- npx -y vivid-mcp
 ```
 
 ### Claude Desktop
@@ -41,7 +41,7 @@ claude mcp add vivid -e VIVID_API_KEY=vk_xxx -- npx -y github:loopotv/vivid-mcp
   "mcpServers": {
     "vivid": {
       "command": "npx",
-      "args": ["-y", "github:loopotv/vivid-mcp"],
+      "args": ["-y", "vivid-mcp"],
       "env": { "VIVID_API_KEY": "vk_xxx" }
     }
   }
@@ -50,7 +50,7 @@ claude mcp add vivid -e VIVID_API_KEY=vk_xxx -- npx -y github:loopotv/vivid-mcp
 
 ### Cursor / other clients
 
-Same command: `npx -y github:loopotv/vivid-mcp` with `VIVID_API_KEY` in the environment.
+Same command: `npx -y vivid-mcp` with `VIVID_API_KEY` in the environment.
 
 ### Environment
 
