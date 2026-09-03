@@ -18,6 +18,8 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_share_asset` | Publish an asset and get a share link, toggle favorite |
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
 | `vivid_list_projects` | Your projects |
+| `vivid_list_editor_projects` | Saved video-editor timelines |
+| `vivid_render_project` · `vivid_render_status` | Queue an MP4 render of an editor project and poll it (see *Rendering* below) |
 
 ## Setup
 
@@ -63,6 +65,10 @@ Same command: `npx -y github:loopotv/vivid-mcp` with `VIVID_API_KEY` in the envi
 - "Generate 2 images of a leather handbag on a marble counter, 4:5, with nano-banana-2."
 - "Upload ~/Desktop/bag.jpg and make a 10 s 9:16 video with Seedance 2.5 using it as the product reference. Tell me when it's done."
 - "Download my last video to ~/Downloads and give me a public link."
+
+## Rendering
+
+VIVID's video editor renders in the browser (Canvas2D + WebCodecs), so `vivid_render_project` does not produce the file by itself: it queues a **render job** and returns an `openUrl`. Open that URL in a browser where you are logged into vividai.tv (or pass `openBrowser: true` to open it on this machine) — the editor loads the project, exports it and uploads the MP4 to your gallery. `vivid_render_status` reports progress and the final asset; `vivid_download_asset` fetches it.
 
 ## Credits
 
