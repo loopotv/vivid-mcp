@@ -83,7 +83,7 @@ function guarded<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Prom
     } catch (err) {
       if (err instanceof VividApiError) {
         const hint = err.status === 401 ? ' (check VIVID_API_KEY — generate one in Settings on vividai.tv)'
-          : err.status === 402 || /crediti|credits/i.test(err.message) ? ' (not enough credits — top up on vividai.tv/billing)'
+          : err.status === 402 || /crediti insufficienti|insufficient credits|not enough credits/i.test(err.message) ? ' (not enough credits — top up on vividai.tv/billing)'
           : '';
         return fail(`VIVID API error ${err.status}: ${err.message}${hint}`);
       }
