@@ -11,10 +11,18 @@ if (!apiKey) {
   process.exit(1);
 }
 
+// A key copied by hand from the masked box on vividai.tv/settings arrives as
+// "vk_••••…": non-ASCII, so fetch() would die with an opaque ByteString error.
+if (!/^[\x21-\x7e]+$/.test(apiKey)) {
+  console.error('vivid-mcp: VIVID_API_KEY contains characters that cannot go in an HTTP header' +
+    (apiKey.includes('•') ? ' — it looks like the masked key ("vk_••••"). Reveal the key (eye icon) or use the Copy button on https://vividai.tv/settings and paste the full key.' : '.'));
+  process.exit(1);
+}
+
 const client = new VividClient({ apiKey, apiUrl: process.env.VIVID_API_URL ?? DEFAULT_API_URL });
 
 const server = new McpServer(
-  { name: 'vivid-mcp', version: '0.1.0' },
+  { name: 'vivid-mcp', version: '0.1.2' },
   {
     instructions: [
       'VIVID is an AI content studio for e-commerce (vividai.tv). This server drives the account linked to VIVID_API_KEY.',
