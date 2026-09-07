@@ -48,6 +48,7 @@ export class VividClient {
 
   /** Absolute URL for an API path (handy for download links in tool output). */
   url(path: string): string {
+    if (/^https?:\/\//i.test(path)) return path; // already absolute (temp URLs, share links)
     return `${this.apiUrl}${path.startsWith('/') ? path : `/${path}`}`;
   }
 
