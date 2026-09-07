@@ -46,8 +46,8 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_video', 'vivid_get_asset', 'vivid_job_status',
-      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects',
+      'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
+      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects', 'vivid_list_voices',
       'vivid_render_project', 'vivid_render_status', 'vivid_share_asset', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
@@ -158,5 +158,20 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_whoami', arguments: {} });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toMatch(/401.*VIVID_API_KEY/);
+  });
+
+  it('vivid_generate_voice posts to tts-v2 and passes provider, voice and locale', async () => {
+    routes.set('POST /api/ai/tts-v2', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/tts/x.mp3', provider: 'gemini', credits: 1 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'gemini', voice: 'Kore' } });
+    expect(calls[0].body).toMatchObject({ provider: 'gemini', text: 'Ciao', voice: 'Kore', locale: 'it' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'gemini', credits: 1, url: expect.stringContaining('.mp3') });
+  });
+
+  it('vivid_generate_voice requires a reference for omnivoice-clone', async () => {
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'omnivoice-clone' } });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('referenceAudio');
   });
 });

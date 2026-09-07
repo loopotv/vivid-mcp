@@ -413,6 +413,51 @@ export function registerTools(server: McpServer, client: VividClient): void {
     return json(data);
   }));
 
+  // ── Voice (TTS) ──────────────────────────────────────────────────────────
+
+  server.registerTool('vivid_list_voices', {
+    title: 'List TTS voices and providers',
+    description: 'List the text-to-speech providers and preset voices available on VIVID (Deepgram Aura-2, MiniMax HD + cloned voices, OmniVoice, OmniVoice Voice Clone, Gemini 3.1 Flash) with their credit cost. Use it before vivid_generate_voice.',
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  }, guarded(async () => {
+    const { data } = await client.get<Record<string, unknown>>('/api/ai/tts-voices');
+    return json(data);
+  }));
+
+  server.registerTool('vivid_generate_voice', {
+    title: 'Generate voice (TTS)',
+    description: 'Synthesize speech from text. Providers: "omnivoice-clone" clones a voice from a 3–10 s reference (0.5 credits/clip, best for a consistent presenter), "gemini" = Google Gemini 3.1 Flash presets like Kore/Puck/Zephyr/Charon/Aoede (1 credit/clip, rich prosody), "omnivoice" = voice designed from an English description (0.5), "deepgram" = Aura-2 presets (free). Returns a public MP3 URL (7-day temp storage) and optionally downloads it.',
+    inputSchema: {
+      text: z.string().min(1).max(3000),
+      provider: z.enum(['omnivoice-clone', 'gemini', 'omnivoice', 'deepgram']).default('gemini'),
+      locale: z.enum(['it', 'en', 'es']).default('it'),
+      voice: z.string().optional().describe('gemini: preset name (Kore…); deepgram: model id (aura-2-livia-it…); omnivoice: voice description in English.'),
+      referenceAudio: z.string().optional().describe('omnivoice-clone: local path or URL of 3–10 s of the voice to clone.'),
+      referenceText: z.string().optional().describe('omnivoice-clone: transcript of the reference clip (improves accuracy).'),
+      speed: z.number().min(0.1).max(5).optional(),
+      outputDir: z.string().optional().describe('Download the MP3 into this local directory.'),
+      filename: z.string().optional(),
+    },
+  }, guarded(async (a) => {
+    let referenceAudioUrl: string | undefined;
+    if (a.provider === 'omnivoice-clone') {
+      if (!a.referenceAudio) throw new VividApiError('referenceAudio is required for omnivoice-clone', 400);
+      referenceAudioUrl = /^https?:\/\//i.test(a.referenceAudio) ? a.referenceAudio : (await client.tempUpload(a.referenceAudio)).url;
+    }
+    const { data } = await client.post<{ url: string; provider: string; credits: number }>('/api/ai/tts-v2', {
+      provider: a.provider, text: a.text, locale: a.locale, voice: a.voice, speed: a.speed, referenceAudioUrl, referenceText: a.referenceText,
+    });
+    let path: string | undefined;
+    if (a.outputDir) {
+      const { bytes } = await client.download(data.url);
+      await mkdir(a.outputDir, { recursive: true });
+      path = join(a.outputDir, a.filename ?? `voice_${Date.now()}.mp3`);
+      await writeFile(path, bytes);
+    }
+    return json({ url: data.url, provider: data.provider, credits: data.credits, path });
+  }));
+
   server.registerTool('vivid_list_projects', {
     title: 'List projects',
     description: 'List the account projects (brand containers) — use a project id to group generations.',

@@ -120,7 +120,9 @@ export class VividClient {
     const form = new FormData();
     // Node's Uint8Array is typed over ArrayBufferLike; Blob wants a plain ArrayBuffer view.
     form.append('file', new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>], { type: contentType }), filename);
-    const { data } = await this.post<{ url: string; key: string }>('/api/ai/temp-upload', form);
+    // Audio has its own endpoint (temp-upload only accepts images/videos).
+    const endpoint = contentType.startsWith('audio/') ? '/api/ai/temp-audio-upload' : '/api/ai/temp-upload';
+    const { data } = await this.post<{ url: string; key: string }>(endpoint, form);
     return data;
   }
 }
