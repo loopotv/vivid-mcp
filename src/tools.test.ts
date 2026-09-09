@@ -168,6 +168,14 @@ describe('vivid-mcp tools', () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'gemini', credits: 1, url: expect.stringContaining('.mp3') });
   });
 
+  it('vivid_generate_voice minimax passes the voice id and emotion to tts-v2', async () => {
+    routes.set('POST /api/ai/tts-v2', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/tts/m.mp3', provider: 'minimax', credits: 1 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'minimax', voice: 'Italian_Narrator', emotion: 'happy' } });
+    expect(calls[0].body).toMatchObject({ provider: 'minimax', text: 'Ciao', voice: 'Italian_Narrator', emotion: 'happy', locale: 'it' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'minimax', credits: 1 });
+  });
+
   it('vivid_generate_voice requires a reference for omnivoice-clone', async () => {
     const client = await connect();
     const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'omnivoice-clone' } });

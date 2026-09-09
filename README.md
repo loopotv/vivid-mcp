@@ -18,7 +18,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_share_asset` | Publish an asset and get a share link, toggle favorite |
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
-| `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, OmniVoice voice design, Deepgram |
+| `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, cloned voices, emotions), OmniVoice voice design, Deepgram |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
 | `vivid_render_project` · `vivid_render_status` | Queue an MP4 render of an editor project and poll it (see *Rendering* below) |

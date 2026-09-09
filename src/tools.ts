@@ -427,12 +427,13 @@ export function registerTools(server: McpServer, client: VividClient): void {
 
   server.registerTool('vivid_generate_voice', {
     title: 'Generate voice (TTS)',
-    description: 'Synthesize speech from text. Providers: "omnivoice-clone" clones a voice from a 3–10 s reference (0.5 credits/clip, best for a consistent presenter), "gemini" = Google Gemini 3.1 Flash presets like Kore/Puck/Zephyr/Charon/Aoede (1 credit/clip, rich prosody), "omnivoice" = voice designed from an English description (0.5), "deepgram" = Aura-2 presets (free). Returns a public MP3 URL (7-day temp storage) and optionally downloads it.',
+    description: 'Synthesize speech from text. Providers: "omnivoice-clone" clones a voice from a 3–10 s reference (0.5 credits/clip, best for a consistent presenter), "gemini" = Google Gemini 3.1 Flash presets like Kore/Puck/Zephyr/Charon/Aoede (1 credit/clip, rich prosody), "minimax" = MiniMax Speech 2.8 HD presets (ids from vivid_list_voices → minimax[]) or one of the account\'s cloned voices (pass its id) with an optional emotion (1 credit/clip), "omnivoice" = voice designed from an English description (0.5), "deepgram" = Aura-2 presets (free). Returns a public MP3 URL (7-day temp storage) and optionally downloads it.',
     inputSchema: {
       text: z.string().min(1).max(3000),
-      provider: z.enum(['omnivoice-clone', 'gemini', 'omnivoice', 'deepgram']).default('gemini'),
+      provider: z.enum(['omnivoice-clone', 'gemini', 'minimax', 'omnivoice', 'deepgram']).default('gemini'),
       locale: z.enum(['it', 'en', 'es']).default('it'),
-      voice: z.string().optional().describe('gemini: preset name (Kore…); deepgram: model id (aura-2-livia-it…); omnivoice: voice description in English.'),
+      voice: z.string().optional().describe('gemini: preset name (Kore…); minimax: preset id (Italian_Narrator…) or a cloned voice id; deepgram: model id (aura-2-livia-it…); omnivoice: voice description in English.'),
+      emotion: z.enum(['neutral', 'happy', 'sad', 'angry', 'surprised', 'calm', 'whisper', 'fearful']).optional().describe('minimax only.'),
       referenceAudio: z.string().optional().describe('omnivoice-clone: local path or URL of 3–10 s of the voice to clone.'),
       referenceText: z.string().optional().describe('omnivoice-clone: transcript of the reference clip (improves accuracy).'),
       speed: z.number().min(0.1).max(5).optional(),
@@ -446,7 +447,7 @@ export function registerTools(server: McpServer, client: VividClient): void {
       referenceAudioUrl = /^https?:\/\//i.test(a.referenceAudio) ? a.referenceAudio : (await client.tempUpload(a.referenceAudio)).url;
     }
     const { data } = await client.post<{ url: string; provider: string; credits: number }>('/api/ai/tts-v2', {
-      provider: a.provider, text: a.text, locale: a.locale, voice: a.voice, speed: a.speed, referenceAudioUrl, referenceText: a.referenceText,
+      provider: a.provider, text: a.text, locale: a.locale, voice: a.voice, speed: a.speed, emotion: a.emotion, referenceAudioUrl, referenceText: a.referenceText,
     });
     let path: string | undefined;
     if (a.outputDir) {
