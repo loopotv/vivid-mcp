@@ -46,7 +46,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
+      'vivid_chat', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects', 'vivid_list_voices',
       'vivid_render_project', 'vivid_render_status', 'vivid_share_asset', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -181,5 +181,22 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'omnivoice-clone' } });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain('referenceAudio');
+  });
+
+  it('vivid_chat posts the conversation to /api/ai/chat and returns text + credits', async () => {
+    routes.set('POST /api/ai/chat', () => ({ body: { success: true, data: { text: 'Ciao!', model: 'claude-sonnet-5', family: 'claude', usage: { inputTokens: 12, outputTokens: 3 }, credits: 0.01, providerCredits: 1, creditsRemaining: 99.99 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_chat', arguments: { model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'Ciao' }] } });
+    expect(calls[0].body).toEqual({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'Ciao' }], maxTokens: 2000 });
+    const out = JSON.parse(textOf(r));
+    expect(out.text).toBe('Ciao!');
+    expect(out.credits).toBe(0.01);
+  });
+
+  it('vivid_list_models type=llm reads the chat catalog', async () => {
+    routes.set('GET /api/ai/chat/models', () => ({ body: { success: true, data: [{ slug: 'grok-4.6', name: 'Grok 4.6', family: 'grok', creditsPerMTokens: { input: 150, output: 450 } }] } }));
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_list_models', arguments: { type: 'llm' } })));
+    expect(out[0].slug).toBe('grok-4.6');
   });
 });

@@ -18,6 +18,16 @@ interface AiModel {
   icon?: string; capabilities?: Record<string, unknown>;
 }
 
+interface ChatModel {
+  slug: string; name: string; family: string; provider: string; description: string | null;
+  creditsPerMTokens: { input: number; output: number }; supportsReasoningEffort: boolean;
+}
+
+interface ChatResult {
+  text: string; model: string; family: string; usage: { inputTokens: number; outputTokens: number };
+  credits: number; providerCredits?: number; creditsRemaining: number;
+}
+
 interface Job {
   id: string; type: string; status: string; input?: string | Record<string, unknown>;
   output?: string | Record<string, unknown>; credits_used: number; created_at: string; project_id?: string | null;
@@ -175,14 +185,35 @@ export function registerTools(server: McpServer, client: VividClient): void {
     title: 'List AI models',
     description: 'List the AI models available to this account with pricing (credits) and capabilities. Use the returned `slug` as the `model` argument of vivid_generate_image / vivid_generate_video. Video models expose durations, resolutions, aspect ratios and what they support (startFrame, endFrame, reference, audio…).',
     inputSchema: {
-      type: z.enum(['image', 'video']).optional().describe('Which catalog to list. Omit to get both.'),
+      type: z.enum(['image', 'video', 'llm']).optional().describe('Which catalog to list. Omit to get image + video; "llm" lists the chat models for vivid_chat.'),
     },
     annotations: { readOnlyHint: true },
   }, guarded(async ({ type }) => {
+    if (type === 'llm') return json((await client.get<ChatModel[]>('/api/ai/chat/models')).data);
     const list = async (t: 'image' | 'video') => (await client.get<AiModel[]>('/api/ai/models', { type: t })).data.map(summariseModel);
     if (type) return json(await list(type));
     const [image, video] = await Promise.all([list('image'), list('video')]);
     return json({ image, video });
+  }));
+
+  server.registerTool('vivid_chat', {
+    title: 'Chat with an LLM',
+    description: 'Run one chat completion on VIVID\'s LLM routing (Grok, Claude, OpenAI GPT via Kie.ai; Kimi via Wavespeed) paid in credits: provider price + 50%, billed per token (list with vivid_list_models type="llm", prices in credits per 1M tokens). Non-streaming. Pass the full conversation each call (system/user/assistant); image parts as {type:"image_url", image_url:{url}} on vision models. Returns the reply text, token usage and the credits charged.',
+    inputSchema: {
+      messages: z.array(z.object({
+        role: z.enum(['system', 'user', 'assistant']),
+        content: z.union([z.string(), z.array(z.union([
+          z.object({ type: z.literal('text'), text: z.string() }),
+          z.object({ type: z.literal('image_url'), image_url: z.object({ url: z.string().url() }) }),
+        ]))]),
+      })).min(1).max(80),
+      model: z.string().optional().describe('Model slug from vivid_list_models type="llm" (grok-4.6, claude-sonnet-5, gpt-5.6-terra, kimi-k2-5…). Default: the account default (Grok 4.6).'),
+      maxTokens: z.number().int().min(64).max(16000).default(2000),
+      reasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional().describe('Grok / GPT only.'),
+    },
+  }, guarded(async (a) => {
+    const { data } = await client.post<ChatResult>('/api/ai/chat', { model: a.model, messages: a.messages, maxTokens: a.maxTokens, reasoningEffort: a.reasoningEffort });
+    return json(data);
   }));
 
   server.registerTool('vivid_generate_image', {

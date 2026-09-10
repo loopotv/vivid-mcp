@@ -8,7 +8,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 |---|---|
 | `vivid_whoami` | Account linked to the key: plan, credits |
 | `vivid_usage` | Monthly usage vs plan limits |
-| `vivid_list_models` | Image / video models with prices and capabilities |
+| `vivid_list_models` | Image / video / LLM models with prices and capabilities |
 | `vivid_generate_image` | Text-to-image (with optional product / person / context references), waits for the result |
 | `vivid_generate_video` | Start a video (Seedance 2.5, Kling O3, MiniMax H3, Gemini Omni, LTX, Grok…) |
 | `vivid_job_status` | Poll a job, get the asset and download URL |
@@ -18,6 +18,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_share_asset` | Publish an asset and get a share link, toggle favorite |
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
+| `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT (Kie.ai), Kimi (Wavespeed) — billed per token (provider price + 50%) |
 | `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, cloned voices, emotions), OmniVoice voice design, Deepgram |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
