@@ -170,11 +170,11 @@ describe('vivid-mcp tools', () => {
   });
 
   it('vivid_generate_music posts prompt, duration and provider and returns the temp url', async () => {
-    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, requestedSeconds: 88, provider: 'minimax-music-2.6', credits: 14, exactDuration: false } } }));
+    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, requestedSeconds: 88, provider: 'minimax-music-3.0', credits: 14, exactDuration: false } } }));
     const client = await connect();
     const r = await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'warm lo-fi, 85 BPM', durationSec: 88 } });
-    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'minimax-music-2.6', instrumental: true, format: 'mp3' });
-    expect(JSON.parse(textOf(r))).toMatchObject({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, provider: 'minimax-music-2.6', credits: 14 });
+    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'minimax-music-3.0', instrumental: true, format: 'mp3' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, provider: 'minimax-music-3.0', credits: 14 });
   });
 
   it('vivid_generate_music passes stable-audio-3 + wav through', async () => {
