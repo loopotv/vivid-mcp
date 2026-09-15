@@ -91,6 +91,23 @@ export class VividClient {
     return this.request<T>('PATCH', path, body);
   }
 
+  /** POST expecting a plain-text body (SRT/VTT exports). JSON error envelopes are still surfaced. */
+  async postText(path: string, body: unknown): Promise<string> {
+    const res = await this.fetchImpl(this.url(path), {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': 'application/json', Accept: '*/*' }),
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let msg = text.slice(0, 300) || `HTTP ${res.status}`;
+      let code: string | undefined;
+      try { const j = JSON.parse(text) as ApiEnvelope<unknown>; msg = j.error ?? msg; code = j.code; } catch { /* plain text */ }
+      throw new VividApiError(msg, res.status, code);
+    }
+    return text;
+  }
+
   /** Raw binary GET (asset download). Returns bytes + content type. */
   async download(path: string): Promise<{ bytes: Uint8Array; contentType: string }> {
     const res = await this.fetchImpl(this.url(path), { headers: this.headers({ Accept: '*/*' }) });

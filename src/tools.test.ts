@@ -6,7 +6,7 @@ import { VividClient } from './client.js';
 import { registerTools } from './tools.js';
 
 /** Minimal fake of the VIVID API: route → handler. */
-type Handler = (init: RequestInit, url: URL) => { status?: number; body: unknown };
+type Handler = (init: RequestInit, url: URL) => { status?: number; body: unknown; raw?: boolean };
 const routes = new Map<string, Handler>();
 const calls: Array<{ method: string; path: string; body?: unknown; headers: Record<string, string> }> = [];
 
@@ -21,6 +21,7 @@ const fetchMock = vi.fn(async (input: string | URL | Request, init: RequestInit 
   const h = routes.get(key);
   if (!h) return new Response(JSON.stringify({ success: false, error: `no route ${key}` }), { status: 404, headers: { 'content-type': 'application/json' } });
   const r = h(init, url);
+  if (r.raw) return new Response(String(r.body), { status: r.status ?? 200, headers: { 'content-type': 'text/plain' } });
   return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } });
 }) as unknown as typeof fetch;
 
@@ -46,9 +47,9 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_chat', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
+      'vivid_chat', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects', 'vivid_list_voices',
-      'vivid_render_project', 'vivid_render_status', 'vivid_share_asset', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_render_project', 'vivid_render_status', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -166,6 +167,33 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'gemini', voice: 'Kore' } });
     expect(calls[0].body).toMatchObject({ provider: 'gemini', text: 'Ciao', voice: 'Kore', locale: 'it' });
     expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'gemini', credits: 1, url: expect.stringContaining('.mp3') });
+  });
+
+  it('vivid_generate_music posts prompt + duration and returns the temp MP3 url', async () => {
+    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 88 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'warm lo-fi, 85 BPM', durationSec: 88 } });
+    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88 });
+    expect(JSON.parse(textOf(r))).toEqual({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 88, credits: 20 });
+  });
+
+  it('vivid_transcribe sends an asset id as assetId and returns words + cues', async () => {
+    const data = { transcript: 'Ciao mondo.', words: [{ word: 'Ciao', startMs: 0, endMs: 300, confidence: 0.99 }], cues: [{ id: 'c1', text: 'Ciao mondo.', startMs: 0, endMs: 1500, words: [] }], durationMs: 900, language: 'it' };
+    routes.set('POST /api/ai/transcribe', () => ({ body: { success: true, data } }));
+    const client = await connect();
+    const id = 'a'.repeat(32);
+    const r = await client.callTool({ name: 'vivid_transcribe', arguments: { source: id } });
+    expect(calls[0].body).toEqual({ assetId: id, locale: 'it', format: 'json', granularity: 'cue' });
+    expect(JSON.parse(textOf(r))).toEqual(data);
+  });
+
+  it('vivid_transcribe returns the SRT text verbatim for a URL source', async () => {
+    const srt = '1\n00:00:00,000 --> 00:00:01,500\nCiao mondo.\n';
+    routes.set('POST /api/ai/transcribe', () => ({ body: srt, raw: true }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_transcribe', arguments: { source: 'https://cdn/x.mp4', format: 'srt', granularity: 'word', language: 'en' } });
+    expect(calls[0].body).toEqual({ url: 'https://cdn/x.mp4', locale: 'en', format: 'srt', granularity: 'word' });
+    expect(textOf(r)).toBe(srt);
   });
 
   it('vivid_generate_voice minimax passes the voice id and emotion to tts-v2', async () => {

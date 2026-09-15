@@ -500,6 +500,59 @@ export function registerTools(server: McpServer, client: VividClient): void {
     return json(data.map((p) => ({ id: p.id, name: p.name, brandName: p.brand_name, status: p.status, createdAt: p.created_at })));
   }));
 
+  // ── Music ────────────────────────────────────────────────────────────────
+
+  server.registerTool('vivid_generate_music', {
+    title: 'Generate instrumental music',
+    description: 'Generate a unique royalty-free INSTRUMENTAL track (no vocals) from a text description with ACE-Step 1.5 via Wavespeed — genre, mood, instruments, BPM, e.g. "warm lo-fi hip hop, soft piano, vinyl crackle, 85 BPM, chill". 5–240 s, 20 credits flat per track. ACE-Step loves slow intros: for a soundtrack that must carry a video from frame one, add "full energy from the first second, no intro, consistent loudness" (measured: intro drops from ~35 s to ~10 s). Returns a public MP3 URL (7-day temp storage) usable as an editor audio clip or a video soundtrack; set outputDir to also download it. Takes ~30–90 s; the request blocks until the track is ready.',
+    inputSchema: {
+      prompt: z.string().min(3).max(600).describe('Style tags / description of the track (English works best).'),
+      durationSec: z.number().int().min(5).max(240).default(30),
+      outputDir: z.string().optional().describe('Download the MP3 into this local directory.'),
+      filename: z.string().optional(),
+    },
+  }, guarded(async (a) => {
+    const { data } = await client.post<{ url: string; durationSeconds: number }>('/api/ai/generate-music', { prompt: a.prompt, duration: a.durationSec });
+    let path: string | undefined;
+    if (a.outputDir) {
+      const { bytes } = await client.download(data.url);
+      await mkdir(a.outputDir, { recursive: true });
+      path = join(a.outputDir, a.filename ?? `music_${Date.now()}.mp3`);
+      await writeFile(path, bytes);
+    }
+    return json({ url: data.url, durationSeconds: data.durationSeconds, credits: 20, path });
+  }));
+
+  // ── Transcription / subtitles ────────────────────────────────────────────
+
+  server.registerTool('vivid_transcribe', {
+    title: 'Transcribe audio/video (word timestamps, SRT/VTT)',
+    description: 'Speech-to-text with Deepgram Nova-3 (free). Input: a VIVID asset id, a public URL, or a local audio/video file (uploaded for you). Returns JSON with `words[]` (raw per-word startMs/endMs — use these for voice↔subtitle alignment), readable `cues[]` (3–8 words, timing stretched for legibility) and the full `transcript`; or a ready-to-use SRT / VTT file (format=srt|vtt, granularity=cue|word), optionally written to outputPath. Languages: it, en, es. Max 100 MB.',
+    inputSchema: {
+      source: z.string().min(1).describe('Asset id (32 hex chars), http(s) URL, or local file path of the audio/video.'),
+      language: z.enum(['it', 'en', 'es']).default('it'),
+      format: z.enum(['json', 'srt', 'vtt']).default('json'),
+      granularity: z.enum(['cue', 'word']).default('cue').describe('srt/vtt only: one block per readable cue, or one per word (karaoke / alignment checks).'),
+      outputPath: z.string().optional().describe('srt/vtt only: write the subtitle file here.'),
+    },
+  }, guarded(async (a) => {
+    const body: Record<string, unknown> = { locale: a.language, format: a.format, granularity: a.granularity };
+    if (/^[a-f0-9]{32}$/i.test(a.source)) body.assetId = a.source;
+    else if (/^https?:\/\//i.test(a.source)) body.url = a.source;
+    else body.url = (await client.tempUpload(a.source)).url;
+
+    if (a.format === 'json') {
+      const { data } = await client.post<Record<string, unknown>>('/api/ai/transcribe', body);
+      return json(data);
+    }
+    const text = await client.postText('/api/ai/transcribe', body);
+    if (a.outputPath) {
+      await writeFile(a.outputPath, text, 'utf8');
+      return json({ path: a.outputPath, format: a.format, granularity: a.granularity, bytes: Buffer.byteLength(text) });
+    }
+    return { content: [{ type: 'text', text }] };
+  }));
+
   // ── Video editor: projects + render queue ────────────────────────────────
 
   server.registerTool('vivid_list_editor_projects', {
