@@ -503,24 +503,41 @@ export function registerTools(server: McpServer, client: VividClient): void {
   // ── Music ────────────────────────────────────────────────────────────────
 
   server.registerTool('vivid_generate_music', {
-    title: 'Generate instrumental music',
-    description: 'Generate a unique royalty-free INSTRUMENTAL track (no vocals) from a text description with ACE-Step 1.5 via Wavespeed — genre, mood, instruments, BPM, e.g. "warm lo-fi hip hop, soft piano, vinyl crackle, 85 BPM, chill". 5–240 s, 20 credits flat per track. ACE-Step loves slow intros: for a soundtrack that must carry a video from frame one, add "full energy from the first second, no intro, consistent loudness" (measured: intro drops from ~35 s to ~10 s). Returns a public MP3 URL (7-day temp storage) usable as an editor audio clip or a video soundtrack; set outputDir to also download it. Takes ~30–90 s; the request blocks until the track is ready.',
+    title: 'Generate music (MiniMax Music 2.6 / Stable Audio 3)',
+    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-2.6" (default, 14 credits) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (88 s asked → ~97 s delivered), so trim in the editor. "stable-audio-3" (25 credits) — Stability AI, EXACT duration 1–380 s, instrumental / sound design, mp3 or wav; only if the server has it configured (see vivid_list_music_providers). Takes 1–3 minutes; the call blocks until the track is ready. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack; set outputDir to also download it.',
     inputSchema: {
-      prompt: z.string().min(3).max(600).describe('Style tags / description of the track (English works best).'),
-      durationSec: z.number().int().min(5).max(240).default(30),
-      outputDir: z.string().optional().describe('Download the MP3 into this local directory.'),
+      prompt: z.string().min(3).max(1500).describe('Style brief in English: genre, mood, instruments, tempo, what it accompanies.'),
+      durationSec: z.number().int().min(5).max(380).default(60),
+      provider: z.enum(['minimax-music-2.6', 'stable-audio-3']).default('minimax-music-2.6'),
+      instrumental: z.boolean().default(true).describe('false = with vocals (MiniMax only; give lyrics or let it write them).'),
+      lyrics: z.string().max(3000).optional().describe('MiniMax with vocals: the lyrics, optionally with [Verse]/[Chorus]/[Bridge] tags.'),
+      format: z.enum(['mp3', 'wav']).default('mp3').describe('wav only on stable-audio-3.'),
+      outputDir: z.string().optional().describe('Download the file into this local directory.'),
       filename: z.string().optional(),
     },
   }, guarded(async (a) => {
-    const { data } = await client.post<{ url: string; durationSeconds: number }>('/api/ai/generate-music', { prompt: a.prompt, duration: a.durationSec });
+    const { data } = await client.post<{ url: string; durationSeconds: number; requestedSeconds: number; provider: string; credits: number; exactDuration: boolean }>('/api/ai/generate-music', {
+      prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: a.format,
+    });
     let path: string | undefined;
     if (a.outputDir) {
       const { bytes } = await client.download(data.url);
       await mkdir(a.outputDir, { recursive: true });
-      path = join(a.outputDir, a.filename ?? `music_${Date.now()}.mp3`);
+      const ext = data.url.endsWith('.wav') ? 'wav' : 'mp3';
+      path = join(a.outputDir, a.filename ?? `music_${Date.now()}.${ext}`);
       await writeFile(path, bytes);
     }
-    return json({ url: data.url, durationSeconds: data.durationSeconds, credits: 20, path });
+    return json({ ...data, path });
+  }));
+
+  server.registerTool('vivid_list_music_providers', {
+    title: 'List music providers',
+    description: 'Music generation providers with credits, capabilities (exact duration, vocals, max length) and whether each is configured on the server.',
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  }, guarded(async () => {
+    const { data } = await client.get<Record<string, unknown>>('/api/ai/music-providers');
+    return json(data);
   }));
 
   // ── Transcription / subtitles ────────────────────────────────────────────

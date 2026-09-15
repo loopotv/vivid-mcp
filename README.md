@@ -19,7 +19,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
 | `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT, Kimi (Wavespeed)  |
-| `vivid_generate_music` | Unique instrumental track (ACE-Step 1.5), 5–240 s, 20 credits — soundtrack for a video or editor timeline |
+| `vivid_generate_music` · `vivid_list_music_providers` | Unique track from a brief — MiniMax Music 2.6 (14 credits, vocals optional) or Stable Audio 3 (25 credits, exact length, wav) |
 | `vivid_transcribe` | Speech-to-text (Deepgram Nova-3, free): per-word timestamps, readable cues, SRT/VTT export — from an asset, URL or local file |
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
 | `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |
@@ -72,7 +72,7 @@ Same command: `npx -y vivid-mcp` with `VIVID_API_KEY` in the environment.
 - "Generate 2 images of a leather handbag on a marble counter, 4:5, with nano-banana-2."
 - "Upload ~/Desktop/bag.jpg and make a 10 s 9:16 video with Seedance 2.5 using it as the product reference. Tell me when it's done."
 - "Download my last video to ~/Downloads and give me a public link."
-- "Make a 90 s upbeat instrumental for a product film, full energy from the start, and save it to ./music."
+- "Make a ~90 s upbeat instrumental for a product film with MiniMax and save it to ./music."
 - "Transcribe ./voiceover.mp3 in Italian and write word-level SRT to ./subs.srt."
 - "In my last generated image, make the ring on the ring finger a plain yellow gold band, then compare it with ./sku/ring-01.jpg and tell me if it passes."
 

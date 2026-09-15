@@ -48,7 +48,7 @@ describe('vivid-mcp tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_chat', 'vivid_compare_product', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
-      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects', 'vivid_list_voices',
+      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_voices',
       'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
@@ -169,12 +169,19 @@ describe('vivid-mcp tools', () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'gemini', credits: 1, url: expect.stringContaining('.mp3') });
   });
 
-  it('vivid_generate_music posts prompt + duration and returns the temp MP3 url', async () => {
-    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 88 } } }));
+  it('vivid_generate_music posts prompt, duration and provider and returns the temp url', async () => {
+    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, requestedSeconds: 88, provider: 'minimax-music-2.6', credits: 14, exactDuration: false } } }));
     const client = await connect();
     const r = await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'warm lo-fi, 85 BPM', durationSec: 88 } });
-    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88 });
-    expect(JSON.parse(textOf(r))).toEqual({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 88, credits: 20 });
+    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'minimax-music-2.6', instrumental: true, format: 'mp3' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, provider: 'minimax-music-2.6', credits: 14 });
+  });
+
+  it('vivid_generate_music passes stable-audio-3 + wav through', async () => {
+    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.wav', durationSeconds: 30, requestedSeconds: 30, provider: 'stable-audio-3', credits: 25, exactDuration: true } } }));
+    const client = await connect();
+    await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'rain on a tin roof', durationSec: 30, provider: 'stable-audio-3', format: 'wav' } });
+    expect(calls[0].body).toMatchObject({ provider: 'stable-audio-3', format: 'wav', duration: 30 });
   });
 
   it('vivid_transcribe sends an asset id as assetId and returns words + cues', async () => {
