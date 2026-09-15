@@ -553,6 +553,68 @@ export function registerTools(server: McpServer, client: VividClient): void {
     return { content: [{ type: 'text', text }] };
   }));
 
+  // ── Local retouch + product QC ───────────────────────────────────────────
+
+  const ASSET_ID = /^[a-f0-9]{32}$/i;
+  /** assetId | URL | local path → { assetId } or { url } (uploading local files / foreign URLs). */
+  async function imageRef(source: string): Promise<{ assetId?: string; url?: string }> {
+    if (ASSET_ID.test(source)) return { assetId: source };
+    if (/^https?:\/\//i.test(source) && source.includes('/api/temp/')) return { url: source };
+    return { url: (await client.tempUpload(source)).url };
+  }
+
+  server.registerTool('vivid_retouch', {
+    title: 'Retouch one object in an image (masked edit)',
+    description: 'Edit ONLY one object/area of an image and leave every other pixel untouched — e.g. "the ring on the left hand" → "make it a plain yellow gold band". Say WHERE with `target` (plain text: the tool locates it with a two-pass labelled-grid vision step, ~40–60 s), or `region` {x,y,w,h} as fractions of the frame, or a `mask` image (white = edit). A square crop around the target goes to the edit model at full resolution and the original bytes are composited back outside a feathered region, so the rest of the photo is byte-identical. Models: nano-banana (default, 6 credits, best fidelity), seedream (4), grok (3), z-image (2, true mask inpaint — needs region or mask). Returns the new asset id + download URL; chain with vivid_compare_product to verify against the SKU and feed its fixPrompt back here.',
+    inputSchema: {
+      source: z.string().min(1).describe('Asset id (32 hex), VIVID temp URL, other URL or local file path of the image to edit.'),
+      prompt: z.string().min(3).max(1500).describe('What the target should become. Be concrete about material, colour, shape; the tool adds the "change nothing else" constraints.'),
+      target: z.string().max(300).optional().describe('Plain-text description of the object/area to edit, e.g. "the ring on the ring finger".'),
+      region: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0).max(1), h: z.number().min(0).max(1) }).optional().describe('Explicit bounding box, fractions of width/height (top-left origin). Skips the locate step.'),
+      mask: z.string().optional().describe('Mask image (white = edit, black = keep), any size: local path, URL or asset id.'),
+      model: z.enum(['nano-banana', 'seedream', 'grok', 'z-image']).default('nano-banana'),
+      filename: z.string().optional(),
+      outputDir: z.string().optional().describe('Also download the result into this local directory.'),
+    },
+  }, guarded(async (a) => {
+    if (!a.target && !a.region && !a.mask) throw new VividApiError('one of target, region or mask is required', 400);
+    const src = await imageRef(a.source);
+    const body: Record<string, unknown> = { sourceAssetId: src.assetId, sourceUrl: src.url, prompt: a.prompt, target: a.target, region: a.region, model: a.model, filename: a.filename };
+    if (a.mask) {
+      const m = await imageRef(a.mask);
+      body.maskUrl = m.url ?? `${client.apiUrl}/api/assets/${m.assetId}/download`;
+    }
+    const { data } = await client.post<Record<string, unknown> & { assetId: string; downloadUrl: string }>('/api/ai/retouch', body);
+    let path: string | undefined;
+    if (a.outputDir) {
+      const { bytes } = await client.download(data.downloadUrl);
+      await mkdir(a.outputDir, { recursive: true });
+      path = join(a.outputDir, `${(a.filename ?? 'retouch').replace(/\.[a-z0-9]+$/i, '')}_${data.assetId.slice(0, 8)}.png`);
+      await writeFile(path, bytes);
+    }
+    return json({ ...data, downloadUrl: abs(data.downloadUrl), path });
+  }));
+
+  server.registerTool('vivid_compare_product', {
+    title: 'Compare a render with the SKU reference (visual QC)',
+    description: 'Visual quality control: checks that the product in a generated/retouched image matches the real product photo (SKU card). Vision LLM compares shape, proportions, materials/finish, colours, stones/elements, logos, hardware — product only, background ignored. Returns match 0–1, verdict pass|review|fail, a list of differences with severity, a summary and a `fixPrompt` you can pass straight to vivid_retouch. 1 credit, ~15–25 s.',
+    inputSchema: {
+      candidate: z.string().min(1).describe('Image to check: asset id, URL or local path.'),
+      reference: z.string().min(1).describe('SKU / real product photo: asset id, URL or local path.'),
+      skuDescription: z.string().max(2000).optional().describe('SKU notes: material, stone, colour, size… anything the reference photo does not show.'),
+      focus: z.string().max(300).optional().describe('Which object to compare when the candidate shows several, e.g. "the ring on the hand".'),
+      language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the summary.'),
+    },
+    annotations: { readOnlyHint: true },
+  }, guarded(async (a) => {
+    const [cand, ref] = await Promise.all([imageRef(a.candidate), imageRef(a.reference)]);
+    const { data } = await client.post<Record<string, unknown>>('/api/ai/compare-product', {
+      candidateAssetId: cand.assetId, candidateUrl: cand.url, referenceAssetId: ref.assetId, referenceUrl: ref.url,
+      skuDescription: a.skuDescription, focus: a.focus, lang: a.language,
+    });
+    return json(data);
+  }));
+
   // ── Video editor: projects + render queue ────────────────────────────────
 
   server.registerTool('vivid_list_editor_projects', {

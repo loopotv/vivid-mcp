@@ -47,9 +47,9 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_chat', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
+      'vivid_chat', 'vivid_compare_product', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_projects', 'vivid_list_voices',
-      'vivid_render_project', 'vivid_render_status', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -194,6 +194,31 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_transcribe', arguments: { source: 'https://cdn/x.mp4', format: 'srt', granularity: 'word', language: 'en' } });
     expect(calls[0].body).toEqual({ url: 'https://cdn/x.mp4', locale: 'en', format: 'srt', granularity: 'word' });
     expect(textOf(r)).toBe(srt);
+  });
+
+  it('vivid_retouch posts asset id + target + prompt and returns the new asset', async () => {
+    const id = 'b'.repeat(32);
+    routes.set('POST /api/ai/retouch', () => ({ body: { success: true, data: { jobId: 'j1', assetId: 'c'.repeat(32), downloadUrl: '/api/assets/' + 'c'.repeat(32) + '/download', region: { x: 0.5, y: 0.5, w: 0.1, h: 0.06 }, model: 'nano-banana', credits: 6 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_retouch', arguments: { source: id, target: 'the ring', prompt: 'plain gold band' } });
+    expect(calls[0].body).toMatchObject({ sourceAssetId: id, target: 'the ring', prompt: 'plain gold band', model: 'nano-banana' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ assetId: 'c'.repeat(32), downloadUrl: 'https://api.test/api/assets/' + 'c'.repeat(32) + '/download', credits: 6 });
+  });
+
+  it('vivid_retouch refuses a call without target, region or mask', async () => {
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_retouch', arguments: { source: 'b'.repeat(32), prompt: 'gold band' } });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('target, region or mask');
+  });
+
+  it('vivid_compare_product sends both asset ids and the SKU notes', async () => {
+    const data = { productVisible: true, match: 0.18, verdict: 'fail', differences: [], summary: 'no', fixPrompt: 'replace…', model: 'gpt', ms: 1, credits: 1 };
+    routes.set('POST /api/ai/compare-product', () => ({ body: { success: true, data } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_compare_product', arguments: { candidate: 'a'.repeat(32), reference: 'b'.repeat(32), skuDescription: 'silver ring', focus: 'the ring' } });
+    expect(calls[0].body).toEqual({ candidateAssetId: 'a'.repeat(32), referenceAssetId: 'b'.repeat(32), skuDescription: 'silver ring', focus: 'the ring', lang: 'it' });
+    expect(JSON.parse(textOf(r))).toEqual(data);
   });
 
   it('vivid_generate_voice minimax passes the voice id and emotion to tts-v2', async () => {

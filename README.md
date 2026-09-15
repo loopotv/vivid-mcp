@@ -21,6 +21,8 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT, Kimi (Wavespeed)  |
 | `vivid_generate_music` | Unique instrumental track (ACE-Step 1.5), 5–240 s, 20 credits — soundtrack for a video or editor timeline |
 | `vivid_transcribe` | Speech-to-text (Deepgram Nova-3, free): per-word timestamps, readable cues, SRT/VTT export — from an asset, URL or local file |
+| `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
+| `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |
 | `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, cloned voices, emotions), OmniVoice voice design, Deepgram |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
@@ -72,6 +74,7 @@ Same command: `npx -y vivid-mcp` with `VIVID_API_KEY` in the environment.
 - "Download my last video to ~/Downloads and give me a public link."
 - "Make a 90 s upbeat instrumental for a product film, full energy from the start, and save it to ./music."
 - "Transcribe ./voiceover.mp3 in Italian and write word-level SRT to ./subs.srt."
+- "In my last generated image, make the ring on the ring finger a plain yellow gold band, then compare it with ./sku/ring-01.jpg and tell me if it passes."
 
 ## Rendering
 
