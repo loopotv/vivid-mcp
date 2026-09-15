@@ -26,6 +26,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, cloned voices, emotions), OmniVoice voice design, Deepgram |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
+| `vivid_create_editor_project` · `vivid_get_editor_project` · `vivid_edit_timeline` | Build and edit video-editor timelines headless (clips, trims, speed, transitions, 16:9↔9:16, texts, masks, keyframes) with the same engine as the web editor — see *Timeline editing* |
 | `vivid_render_project` · `vivid_render_status` | Queue an MP4 render of an editor project and poll it (see *Rendering* below) |
 
 ## Setup
@@ -74,7 +75,12 @@ Same command: `npx -y vivid-mcp` with `VIVID_API_KEY` in the environment.
 - "Download my last video to ~/Downloads and give me a public link."
 - "Make a ~90 s upbeat instrumental for a product film with MiniMax and save it to ./music."
 - "Transcribe ./voiceover.mp3 in Italian and write word-level SRT to ./subs.srt."
+- "Create a 9:16 editor project from my last two videos, cut each to 4 s with a dissolve between them, add the title 'New drop' for the first 3 s, then render it."
 - "In my last generated image, make the ring on the ring finger a plain yellow gold band, then compare it with ./sku/ring-01.jpg and tell me if it passes."
+
+## Timeline editing
+
+`vivid_create_editor_project` / `vivid_edit_timeline` run the VIVID editor headless ([vivid-editor-core](https://www.npmjs.com/package/vivid-editor-core), the same store and AI-command orchestrator the web editor uses) and save the project to your account, so anything you build here opens in `vividai.tv/tools/editor` and renders with `vivid_render_project`. Commands are `{ type, payload }` objects (ADD_CLIP, UPDATE_CLIP, SPLIT_CLIP, SET_TRANSITION, SET_CANVAS_PRESET, ADD_TEXT, SET_ANIMATIONS, ADD_EFFECT, SET_MASK…) — the tool descriptions list them. Media is imported by VIVID asset id, URL or local path.
 
 ## Rendering
 

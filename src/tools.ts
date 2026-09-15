@@ -5,6 +5,9 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { VividClient, VividApiError, extensionFor, sleep } from './client.js';
+import { editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, type AiCommand, type MediaImport } from './editor.js';
+import { openHeadlessProject, projectSchemaV2 } from 'vivid-editor-core';
+import { resolveAssetUrl } from './editor.js';
 
 // ── API shapes (subset we surface) ─────────────────────────────────────────
 
@@ -647,6 +650,95 @@ export function registerTools(server: McpServer, client: VividClient): void {
       id: a.id, name: a.filename.replace(/\.json$/, ''), createdAt: a.created_at,
       editUrl: `${client.apiUrl.includes('vividoai') ? 'https://vividai.tv' : client.apiUrl}/tools/editor?project=${a.id}`,
     })));
+  }));
+
+  // ── Video editor: timeline editing (vivid-editor-core, headless) ────────
+
+  const COMMANDS_DOC = `Commands are the same AiCommand objects the VIVID Art Director uses: [{ "type", "payload" }].
+Timeline: ADD_CLIP {assetId, canvasObject?{x,y,w,h,rotation,opacity,blendMode}} (places the whole asset at the first free gap of a matching track; then trim it with UPDATE_CLIP) · UPDATE_CLIP {id, startMs?, durationMs?, sourceOffsetMs?, playbackRate?, volume?, opacity?} · REMOVE_CLIP {id} · SPLIT_CLIP {clipId, splitAtMs} · DUPLICATE_CLIP {id} · DETACH_AUDIO {clipId} · ADD_TRACK {type:'visual'|'audio'} · CUT_TO_BEAT {audioAssetId, ...} (needs beat analysis from the browser).
+Look: SET_TRANSITION {clipId, edge:'in'|'out', type:'dissolve'|'fade-black' (visual) | 'crossfade'|'fade-in'|'fade-out' (audio), durationMs} · SET_CLIP_ANIMATION {clipId, phase:'in'|'out', type:'fade'|'slide-up'|'slide-down'|'zoom-in'|'zoom-out'|'zoom-pan'|'spin'|'blur-reveal', durationMs} · SET_CINEMATIC_LOOK {look} · SET_CANVAS_PRESET {id,label,width,height} (crop/reframe: landscape 1280x720, landscape-fhd 1920x1080, portrait 720x1280, portrait-fhd 1080x1920, square 1080x1080, social 864x1080) · UPDATE_CANVAS_OBJECT {id, x?, y?, w?, h?, rotation?, blendMode?}.
+Text: ADD_TEXT {text, startMs, endMs, x (0-1), y (0-1), fontFamily?, fontSize?, color?, animation?} · UPDATE_TEXT {id, ...} · REMOVE_TEXT {id}.
+Keyframes & effects (v2): SET_ANIMATIONS {objectId, objectType:'canvas'|'text', animations:{x|y|scale|rotation|opacity|blur|...: {keyframes:[{t (ms), v, easing?}]}}} · SET_OBJECT_ANIMATION · ADD_EFFECT {objectId, objectType, effect:{type:'blur'|'vignette'|'colorGrade'|'grain'|'glitch'|'chromaticAberration'|'pixelate', ...}} · REMOVE_EFFECT · SET_MASK {objectId, mask:{type:'rect'|'circle'|'reveal'|'clipPath'|'none', ...}} · ADD_AUDIO_REACTIVE.
+Speed: playbackRate is constant per clip (no ramps yet). Ids: read them from vivid_get_editor_project or from "created" in the previous result; a batch is applied one command at a time, so a later command can use a clip created earlier in the same batch.`;
+
+  const mediaSchema = z.object({
+    source: z.string().min(1).describe('VIVID asset id (32 hex), URL or local file path (uploaded as editor media).'),
+    name: z.string().optional(),
+    durationMs: z.number().int().positive().optional().describe('Supply when the API does not know it (uploaded videos); otherwise it is read from the asset/job or probed.'),
+    width: z.number().int().positive().optional(),
+    height: z.number().int().positive().optional(),
+    localId: z.string().optional().describe('Id to use inside the project (defaults to the asset id). Reference it in ADD_CLIP.assetId.'),
+  });
+  const commandsSchema = z.array(z.object({ type: z.string(), payload: z.record(z.string(), z.unknown()) }).passthrough());
+
+  async function addMedia(editor: { store: { getState: () => { addAsset: (a: import('vivid-editor-core').AssetClip) => void; assetLibrary: Array<{ id: string }> } } }, media: MediaImport[] | undefined) {
+    const added: Array<{ id: string; name: string; mediaType: string; durationMs: number }> = [];
+    for (const m of media ?? []) {
+      const clip = await importMedia(client, m);
+      if (editor.store.getState().assetLibrary.some((a) => a.id === clip.id)) continue;
+      editor.store.getState().addAsset(clip);
+      added.push({ id: clip.id, name: clip.name, mediaType: clip.mediaType, durationMs: clip.durationMs });
+    }
+    return added;
+  }
+
+  server.registerTool('vivid_get_editor_project', {
+    title: 'Read a video editor project (timeline)',
+    description: 'Load a saved editor project and return its timeline: canvas preset, tracks, media library (assets with local ids), clips (id, track, start/duration/source offset, speed, transitions, animations), canvas objects (position/size/rotation, effects, masks) and text overlays. Use the ids in vivid_edit_timeline. Pass raw=true to get the full project JSON instead.',
+    inputSchema: {
+      projectAssetId: z.string().min(1).describe('Id from vivid_list_editor_projects.'),
+      raw: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: true },
+  }, guarded(async (a) => {
+    const { raw, editor } = await loadProject(client, a.projectAssetId);
+    if (a.raw) return json(raw);
+    return json(summarize(editor.store.getState(), { projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), missingAssets: editor.missingAssets }));
+  }));
+
+  server.registerTool('vivid_create_editor_project', {
+    title: 'Create a video editor project',
+    description: `Create a new editor project (timeline) on the account: pick a canvas preset, import media (VIVID assets, URLs or local files), optionally apply an initial batch of commands, and save. Returns the project id (use it with vivid_edit_timeline / vivid_render_project) and the timeline summary. Media added here is available to ADD_CLIP by its local id (= asset id unless localId is given).\n${COMMANDS_DOC}`,
+    inputSchema: {
+      name: z.string().min(1).max(120),
+      canvasPreset: z.enum(['landscape', 'landscape-fhd', 'portrait', 'portrait-fhd', 'square', 'social']).default('portrait-fhd'),
+      media: z.array(mediaSchema).optional().describe('Media to import into the project library.'),
+      commands: commandsSchema.optional().describe('Initial commands, e.g. ADD_CLIP for each media item.'),
+    },
+  }, guarded(async (a) => {
+    const file = newProject(a.name, a.canvasPreset);
+    const editor = openHeadlessProject(file, { resolveUrl: resolveAssetUrl(client) });
+    const imported = await addMedia(editor, a.media);
+    const result = a.commands?.length ? editor.apply(a.commands as unknown as AiCommand[]) : { applied: 0, errors: [], created: undefined };
+    const out = editor.toProjectFile();
+    const check = projectSchemaV2.safeParse(out);
+    if (!check.success) throw new VividApiError(`Project failed validation before save: ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);
+    const { assetId } = await saveProject(client, out, a.name);
+    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState()) });
+  }));
+
+  server.registerTool('vivid_edit_timeline', {
+    title: 'Edit a video editor project (timeline commands)',
+    description: `Apply editing commands to a saved editor project — clips, trims, speed, transitions, canvas preset (16:9 ↔ 9:16), texts, masks, keyframes, audio — through the same orchestrator as the in-app Art Director, then save it back under the same id. Optionally import media first. Returns applied/errors, the ids created, and the updated timeline. Render the result with vivid_render_project.\n${COMMANDS_DOC}`,
+    inputSchema: {
+      projectAssetId: z.string().min(1),
+      commands: commandsSchema.min(1),
+      media: z.array(mediaSchema).optional().describe('Media to import into the library before applying the commands.'),
+      dryRun: z.boolean().default(false).describe('Apply and report, but do not save.'),
+    },
+  }, guarded(async (a) => {
+    const { editor } = await loadProject(client, a.projectAssetId);
+    const imported = await addMedia(editor, a.media);
+    const result = editor.apply(a.commands as unknown as AiCommand[]);
+    const out = editor.toProjectFile();
+    const check = projectSchemaV2.safeParse(out);
+    if (!check.success) throw new VividApiError(`Project failed validation after edit (not saved): ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);
+    let saved = false;
+    if (!a.dryRun && (result.applied > 0 || imported.length > 0)) {
+      await saveProject(client, out, out.projectName || 'Editor Project', a.projectAssetId);
+      saved = true;
+    }
+    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets }) });
   }));
 
   server.registerTool('vivid_render_project', {

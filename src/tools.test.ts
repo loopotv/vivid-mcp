@@ -47,7 +47,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_chat', 'vivid_compare_product', 'vivid_download_asset', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_job_status',
+      'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_voices',
       'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -226,6 +226,72 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_compare_product', arguments: { candidate: 'a'.repeat(32), reference: 'b'.repeat(32), skuDescription: 'silver ring', focus: 'the ring' } });
     expect(calls[0].body).toEqual({ candidateAssetId: 'a'.repeat(32), referenceAssetId: 'b'.repeat(32), skuDescription: 'silver ring', focus: 'the ring', lang: 'it' });
     expect(JSON.parse(textOf(r))).toEqual(data);
+  });
+
+  describe('timeline tools (vivid-editor-core headless)', () => {
+    const A = 'a'.repeat(32);
+    const P = 'p'.repeat(32);
+    let savedProject: Record<string, unknown> | undefined;
+    const wire = () => {
+      routes.set(`GET /api/assets/${A}`, () => ({ body: { success: true, data: { id: A, type: 'video', filename: 'hero.mp4', duration_sec: 10, metadata: '{"width":1080,"height":1920}', created_at: 'now' } } }));
+      routes.set('POST /api/ai/save-editor-project', (init) => { savedProject = (JSON.parse(String(init.body)) as { projectData: Record<string, unknown> }).projectData; return { body: { success: true, data: { assetId: P, r2Key: 'k' } } }; });
+    };
+
+    it('vivid_create_editor_project imports media, applies commands and saves a v2 file', async () => {
+      wire();
+      routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
+      const client = await connect();
+      const r = await client.callTool({ name: 'vivid_create_editor_project', arguments: {
+        name: 'Spot', canvasPreset: 'portrait-fhd', media: [{ source: A }],
+        commands: [{ type: 'ADD_CLIP', payload: { assetId: A } }, { type: 'ADD_TEXT', payload: { text: 'Ciao', startMs: 0, endMs: 2000, x: 0.5, y: 0.2 } }],
+      } });
+      const out = JSON.parse(textOf(r));
+      expect(r.isError).toBeFalsy();
+      expect(out.projectAssetId).toBe(P);
+      expect(out.errors).toEqual([]);
+      expect(out.applied).toBe(2);
+      expect(out.imported).toEqual([{ id: A, name: 'hero.mp4', mediaType: 'video', durationMs: 10000 }]);
+      expect(out.timeline.clips).toHaveLength(1);
+      expect(out.timeline.clips[0]).toMatchObject({ assetId: A, startMs: 0, durationMs: 10000 });
+      expect(out.timeline.textOverlays[0].text).toBe('Ciao');
+      expect(out.timeline.canvasPreset).toMatchObject({ width: 1080, height: 1920 });
+      expect(savedProject).toMatchObject({ schemaVersion: 2, projectName: 'Spot' });
+      expect((savedProject!.assets as unknown[]).length).toBe(1);
+    });
+
+    it('vivid_edit_timeline loads, splits a clip and saves under the same id; vivid_get_editor_project reads it back', async () => {
+      wire();
+      routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
+      const client = await connect();
+      await client.callTool({ name: 'vivid_create_editor_project', arguments: { name: 'Spot', media: [{ source: A }], commands: [{ type: 'ADD_CLIP', payload: { assetId: A } }] } });
+      const clipId = (JSON.parse(textOf(await client.callTool({ name: 'vivid_get_editor_project', arguments: { projectAssetId: P } }))) as { clips: Array<{ id: string }> }).clips[0].id;
+      calls.length = 0;
+      const r = await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [
+        { type: 'SPLIT_CLIP', payload: { clipId, splitAtMs: 4000 } },
+        { type: 'SET_CANVAS_PRESET', payload: { id: 'square', label: '1:1 Square', width: 1080, height: 1080 } },
+      ] } });
+      const out = JSON.parse(textOf(r));
+      expect(out.errors).toEqual([]);
+      expect(out.saved).toBe(true);
+      expect(out.timeline.clips.map((c: { durationMs: number }) => c.durationMs)).toEqual([4000, 6000]);
+      const save = calls.find((c) => c.path === '/api/ai/save-editor-project');
+      expect((save!.body as { assetId: string }).assetId).toBe(P);
+      const again = JSON.parse(textOf(await client.callTool({ name: 'vivid_get_editor_project', arguments: { projectAssetId: P } })));
+      expect(again.clips).toHaveLength(2);
+      expect(again.canvasPreset.id).toBe('square');
+    });
+
+    it('vivid_edit_timeline dryRun reports errors for unknown clips without saving', async () => {
+      wire();
+      routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
+      const client = await connect();
+      await client.callTool({ name: 'vivid_create_editor_project', arguments: { name: 'Spot' } });
+      calls.length = 0;
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, dryRun: true, commands: [{ type: 'REMOVE_CLIP', payload: { id: 'nope' } }, { type: 'NOPE', payload: {} }] } })));
+      expect(out.saved).toBe(false);
+      expect(out.errors.some((e: string) => /Unknown command type/.test(e))).toBe(true);
+      expect(calls.some((c) => c.path === '/api/ai/save-editor-project')).toBe(false);
+    });
   });
 
   it('vivid_generate_voice minimax passes the voice id and emotion to tts-v2', async () => {

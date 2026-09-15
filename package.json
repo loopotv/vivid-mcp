@@ -1,6 +1,6 @@
 {
   "name": "vivid-mcp",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "MCP server for VIVID (vividai.tv): generate images and videos, browse your assets and jobs from Claude, Cursor or any MCP client.",
   "type": "module",
   "bin": {
@@ -40,7 +40,9 @@
   "homepage": "https://vividai.tv",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "zustand": "^5.0.15",
+    "vivid-editor-core": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
