@@ -29,6 +29,7 @@ const server = new McpServer(
       'Typical flow: vivid_whoami → vivid_list_models → vivid_generate_image / vivid_generate_video → vivid_job_status → vivid_download_asset or vivid_share_asset.',
       'Local files must be uploaded with vivid_upload_file before being used as references, frames or audio.',
       'Every generation costs credits; the models list shows the price. Check credits with vivid_whoami before large batches.',
+      'vivid_record_ui screen-records a scripted walkthrough of vividai.tv with a local Chromium (no credits) and uploads it as a video asset for the timeline tools.',
     ].join(' '),
   },
 );

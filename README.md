@@ -28,6 +28,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_list_editor_projects` | Saved video-editor timelines |
 | `vivid_create_editor_project` · `vivid_get_editor_project` · `vivid_edit_timeline` | Build and edit video-editor timelines headless (clips, trims, speed, transitions, 16:9↔9:16, texts, masks, keyframes) with the same engine as the web editor — see *Timeline editing* |
 | `vivid_render_project` · `vivid_render_status` | Queue an MP4 render of an editor project and poll it (see *Rendering* below) |
+| `vivid_record_ui` | Screen-record a scripted walkthrough of vividai.tv (or any site) with a local Chromium — cursor, smooth moves, click ripples — and upload it as a video asset (see *UI recording* below) |
 
 ## Setup
 
@@ -81,6 +82,12 @@ Same command: `npx -y vivid-mcp` with `VIVID_API_KEY` in the environment.
 ## Timeline editing
 
 `vivid_create_editor_project` / `vivid_edit_timeline` run the VIVID editor headless ([vivid-editor-core](https://www.npmjs.com/package/vivid-editor-core), the same store and AI-command orchestrator the web editor uses) and save the project to your account, so anything you build here opens in `vividai.tv/tools/editor` and renders with `vivid_render_project`. Commands are `{ type, payload }` objects (ADD_CLIP, UPDATE_CLIP, SPLIT_CLIP, SET_TRANSITION, SET_CANVAS_PRESET, ADD_TEXT, SET_ANIMATIONS, ADD_EFFECT, SET_MASK…) — the tool descriptions list them. Media is imported by VIVID asset id, URL or local path.
+
+## UI recording
+
+`vivid_record_ui` drives a local Chromium through [Playwright](https://playwright.dev) and records the session: you pass a list of steps (`goto`, `click`, `hover`, `type`, `fill`, `press`, `scroll`, `wait`, `hide`, `evaluate`, with Playwright selectors) and get back a crisp 2× video (2880×1800 for the default 1440×900 viewport) uploaded to your gallery, ready for `vivid_create_editor_project` / `vivid_edit_timeline`. The browser is logged into the account of `VIVID_API_KEY` automatically (the key is exchanged for a short-lived session through `POST /api/me/session`), a cursor with click ripples is drawn in-page, and the page-load lead is trimmed. Steps can be `optional` (skipped when their element is missing, e.g. a one-time onboarding dialog). No credits are charged.
+
+Requirements on the machine running the MCP server: Google Chrome (or `npx playwright install chromium`) and, for MP4 output, `ffmpeg` on PATH (otherwise the raw webm is uploaded, which the editor renders fine). `playwright-core` is an optional dependency, loaded only when the tool is used.
 
 ## Rendering
 
