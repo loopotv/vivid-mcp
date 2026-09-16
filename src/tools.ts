@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { VividClient, VividApiError, extensionFor, sleep } from './client.js';
-import { editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, type AiCommand, type MediaImport } from './editor.js';
+import { editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, subtitlesOf, type AiCommand, type MediaImport } from './editor.js';
 import { openHeadlessProject, projectSchemaV2 } from 'vivid-editor-core';
 import { resolveAssetUrl } from './editor.js';
 import { recordUi, siteFor, type RecordStep } from './recorder.js';
@@ -658,9 +658,10 @@ export function registerTools(server: McpServer, client: VividClient): void {
   const COMMANDS_DOC = `Commands are the same AiCommand objects the VIVID Art Director uses: [{ "type", "payload" }].
 Timeline: ADD_CLIP {assetId, canvasObject?{x,y,w,h,rotation,opacity,blendMode}} (places the whole asset at the first free gap of a matching track; then trim it with UPDATE_CLIP) · UPDATE_CLIP {id, startMs?, durationMs?, sourceOffsetMs?, playbackRate?, volume?, opacity?} · REMOVE_CLIP {id} · SPLIT_CLIP {clipId, splitAtMs} · DUPLICATE_CLIP {id} · DETACH_AUDIO {clipId} · ADD_TRACK {type:'visual'|'audio'} · CUT_TO_BEAT {audioAssetId, ...} (needs beat analysis from the browser).
 Look: SET_TRANSITION {clipId, edge:'in'|'out', type:'dissolve'|'fade-black' (visual) | 'crossfade'|'fade-in'|'fade-out' (audio), durationMs} · SET_CLIP_ANIMATION {clipId, phase:'in'|'out', type:'fade'|'slide-up'|'slide-down'|'zoom-in'|'zoom-out'|'zoom-pan'|'spin'|'blur-reveal', durationMs} · SET_CINEMATIC_LOOK {look} · SET_CANVAS_PRESET {id,label,width,height} (crop/reframe: landscape 1280x720, landscape-fhd 1920x1080, portrait 720x1280, portrait-fhd 1080x1920, square 1080x1080, social 864x1080) · UPDATE_CANVAS_OBJECT {id, x?, y?, w?, h?, rotation?, blendMode?}.
-Text: ADD_TEXT {text, startMs, endMs, x (0-1), y (0-1), fontFamily?, fontSize?, color?, animation?} · UPDATE_TEXT {id, ...} · REMOVE_TEXT {id}.
+Text: ADD_TEXT {text, startMs, endMs, x (0-1), y (0-1), fontFamily?, fontSize?, color?, animation?, fill?} · UPDATE_TEXT {id, ...} · REMOVE_TEXT {id}. fill = animated gradient on the glyphs: {type:'gradient', colors:['#ff6ec4','#7873f5','#4ade80','#facc15'], angle: 100, animate:'shift'|'none', speed?: periods/s (0.35)} — presets: iridescent, sunset, ocean, gold, candy (same colors as the in-app Fill picker).
+Subtitles (CapCut-style word-level captions): SET_SUBTITLES {cues:[{text, startMs, endMs, words?:[{word,startMs,endMs}]}] | null, templateId?:'outline-reveal'|'ugc-pop'|'karaoke-marker'|'cinematic-fade'|'neon-cyberpunk'|'playful-wiggle', position? (0 top – 100 bottom), styleOverrides?:{fontSize,color,highlightColor,…}, layout?:{x,y,scale,maxWidthPct,rotation}}. Get cues from vivid_transcribe (its cues[] carry per-word timing) on the voice/video asset; words are synthesized evenly when omitted.
 Keyframes & effects (v2): SET_ANIMATIONS {objectId, objectType:'canvas'|'text', animations:{x|y|scale|rotation|opacity|blur|...: {keyframes:[{t (ms), v, easing?}]}}} · SET_OBJECT_ANIMATION · ADD_EFFECT {objectId, objectType, effect:{type:'blur'|'vignette'|'colorGrade'|'grain'|'glitch'|'chromaticAberration'|'pixelate', ...}} · REMOVE_EFFECT · SET_MASK {objectId, mask:{type:'rect'|'circle'|'reveal'|'clipPath'|'none', ...}} · ADD_AUDIO_REACTIVE.
-Speed: playbackRate is constant per clip (no ramps yet). Ids: read them from vivid_get_editor_project or from "created" in the previous result; a batch is applied one command at a time, so a later command can use a clip created earlier in the same batch.`;
+Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, preset:'speed-up'|'slow-down'|'slow-mo-hit'|'punch-in'|'ease-in-out'|'none'} or {clipId, keyframes:[{t (ms from clip start on the timeline), v (rate 0.1–8)}]} gives a variable speed (linear between keyframes; the clip keeps its timeline duration unless the source runs out, then it is shortened). Ids: read them from vivid_get_editor_project or from "created" in the previous result; a batch is applied one command at a time, so a later command can use a clip created earlier in the same batch.`;
 
   const mediaSchema = z.object({
     source: z.string().min(1).describe('VIVID asset id (32 hex), URL or local file path (uploaded as editor media).'),
@@ -694,7 +695,7 @@ Speed: playbackRate is constant per clip (no ramps yet). Ids: read them from viv
   }, guarded(async (a) => {
     const { raw, editor } = await loadProject(client, a.projectAssetId);
     if (a.raw) return json(raw);
-    return json(summarize(editor.store.getState(), { projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), missingAssets: editor.missingAssets }));
+    return json(summarize(editor.store.getState(), { projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }));
   }));
 
   server.registerTool('vivid_create_editor_project', {
@@ -715,12 +716,12 @@ Speed: playbackRate is constant per clip (no ramps yet). Ids: read them from viv
     const check = projectSchemaV2.safeParse(out);
     if (!check.success) throw new VividApiError(`Project failed validation before save: ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);
     const { assetId } = await saveProject(client, out, a.name);
-    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState()) });
+    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { subtitles: subtitlesOf(editor) }) });
   }));
 
   server.registerTool('vivid_edit_timeline', {
     title: 'Edit a video editor project (timeline commands)',
-    description: `Apply editing commands to a saved editor project — clips, trims, speed, transitions, canvas preset (16:9 ↔ 9:16), texts, masks, keyframes, audio — through the same orchestrator as the in-app Art Director, then save it back under the same id. Optionally import media first. Returns applied/errors, the ids created, and the updated timeline. Render the result with vivid_render_project.\n${COMMANDS_DOC}`,
+    description: `Apply editing commands to a saved editor project — clips, trims, speed and speed ramps, transitions, canvas preset (16:9 ↔ 9:16), texts (incl. animated gradient fills), word-level subtitles, masks, keyframes, audio — through the same orchestrator as the in-app Art Director, then save it back under the same id. Optionally import media first. Returns applied/errors, the ids created, and the updated timeline. Render the result with vivid_render_project.\n${COMMANDS_DOC}`,
     inputSchema: {
       projectAssetId: z.string().min(1),
       commands: commandsSchema.min(1),
@@ -739,7 +740,7 @@ Speed: playbackRate is constant per clip (no ramps yet). Ids: read them from viv
       await saveProject(client, out, out.projectName || 'Editor Project', a.projectAssetId);
       saved = true;
     }
-    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets }) });
+    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }) });
   }));
 
   server.registerTool('vivid_render_project', {

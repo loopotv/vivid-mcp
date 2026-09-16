@@ -198,7 +198,14 @@ export function newProject(name: string, presetId?: string): ProjectFile {
 
 // ── Summary (what the agent reads back) ────────────────────────────────────
 
-export function summarize(state: EditorState, extra: { projectAssetId?: string; editUrl?: string; missingAssets?: string[] } = {}) {
+/** Subtitle summary out of the project extras (cues live outside the store). */
+export function subtitlesOf(editor: HeadlessEditor): { cues: number; templateId?: string; position?: number } | undefined {
+  const cues = editor.extras.cues
+  if (!cues || cues.length === 0) return undefined
+  return { cues: cues.length, templateId: editor.extras.templateId, position: editor.extras.position as number | undefined }
+}
+
+export function summarize(state: EditorState, extra: { projectAssetId?: string; editUrl?: string; missingAssets?: string[]; subtitles?: { cues: number; templateId?: string; position?: number } } = {}) {
   const durationMs = state.timelineClips.reduce((m, c) => Math.max(m, c.startMs + c.durationMs), 0);
   const assetName = (id: string) => state.assetLibrary.find((a) => a.id === id)?.name;
   return {
@@ -211,7 +218,7 @@ export function summarize(state: EditorState, extra: { projectAssetId?: string; 
     assets: state.assetLibrary.map((a) => ({ id: a.id, name: a.name, mediaType: a.mediaType, durationMs: a.durationMs, width: a.intrinsicWidth, height: a.intrinsicHeight, serverAssetId: a.serverAssetId, bpm: a.bpm })),
     clips: state.timelineClips.map((c) => ({
       id: c.id, trackId: c.trackId, assetId: c.assetId, name: assetName(c.assetId), mediaType: c.mediaType,
-      startMs: c.startMs, durationMs: c.durationMs, sourceOffsetMs: c.sourceOffsetMs, playbackRate: c.playbackRate ?? 1,
+      startMs: c.startMs, durationMs: c.durationMs, sourceOffsetMs: c.sourceOffsetMs, playbackRate: c.playbackRate ?? 1, speedRamp: c.speedRamp,
       volume: c.volume, opacity: c.opacity, transitionIn: c.transitionIn, transitionOut: c.transitionOut,
       animationIn: c.animationIn, animationOut: c.animationOut,
     })),
@@ -222,8 +229,9 @@ export function summarize(state: EditorState, extra: { projectAssetId?: string; 
       effects: o.effects?.map((e) => e.type), maskV2: o.maskV2?.type !== 'none' ? o.maskV2 : undefined,
     })),
     textOverlays: state.textOverlays.map((t) => ({
-      id: t.id, text: t.text, startMs: t.startMs, endMs: t.endMs, x: t.x, y: t.y, fontFamily: t.fontFamily, fontSize: t.fontSize, color: t.color, animation: t.animation,
+      id: t.id, text: t.text, startMs: t.startMs, endMs: t.endMs, x: t.x, y: t.y, fontFamily: t.fontFamily, fontSize: t.fontSize, color: t.color, fill: t.fill, animation: t.animation,
     })),
+    subtitles: extra.subtitles,
     cinematicLook: state.cinematicLook,
     missingAssets: extra.missingAssets?.length ? extra.missingAssets : undefined,
   };
