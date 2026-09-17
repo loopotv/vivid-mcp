@@ -177,13 +177,6 @@ describe('vivid-mcp tools', () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, provider: 'minimax-music-3.0', credits: 14 });
   });
 
-  it('vivid_generate_music passes stable-audio-3 + wav through', async () => {
-    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.wav', durationSeconds: 30, requestedSeconds: 30, provider: 'stable-audio-3', credits: 25, exactDuration: true } } }));
-    const client = await connect();
-    await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'rain on a tin roof', durationSec: 30, provider: 'stable-audio-3', format: 'wav' } });
-    expect(calls[0].body).toMatchObject({ provider: 'stable-audio-3', format: 'wav', duration: 30 });
-  });
-
   it('vivid_transcribe sends an asset id as assetId and returns words + cues', async () => {
     const data = { transcript: 'Ciao mondo.', words: [{ word: 'Ciao', startMs: 0, endMs: 300, confidence: 0.99 }], cues: [{ id: 'c1', text: 'Ciao mondo.', startMs: 0, endMs: 1500, words: [] }], durationMs: 900, language: 'it' };
     routes.set('POST /api/ai/transcribe', () => ({ body: { success: true, data } }));

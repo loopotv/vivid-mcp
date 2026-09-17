@@ -19,7 +19,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
 | `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT, Kimi (Wavespeed)  |
-| `vivid_generate_music` · `vivid_list_music_providers` | Unique track from a brief — MiniMax Music 3.0 (14 credits, vocals optional) or Stable Audio 3 (25 credits, exact length, wav) |
+| `vivid_generate_music` · `vivid_list_music_providers` | Unique track from a brief — MiniMax Music 3.0 (14 credits, vocals optional; length is a hint, trim in the editor) |
 | `vivid_transcribe` | Speech-to-text (Deepgram Nova-3, free): per-word timestamps, readable cues, SRT/VTT export — from an asset, URL or local file |
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
 | `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |

@@ -508,21 +508,20 @@ export function registerTools(server: McpServer, client: VividClient): void {
   // ── Music ────────────────────────────────────────────────────────────────
 
   server.registerTool('vivid_generate_music', {
-    title: 'Generate music (MiniMax Music 3.0 / Stable Audio 3)',
-    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-3.0" (default, 14 credits) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (88 s asked → 97–146 s delivered), so trim in the editor. "stable-audio-3" (25 credits) — Stability AI, EXACT duration 1–380 s, instrumental / sound design, mp3 or wav; only if the server has it configured (see vivid_list_music_providers). Takes 1–3 minutes; the call blocks until the track is ready. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack; set outputDir to also download it.',
+    title: 'Generate music (MiniMax Music 3.0)',
+    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-3.0" (default, 14 credits) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (88 s asked → 97–146 s delivered), so trim in the editor. Takes 1–3 minutes; the call blocks until the track is ready. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack; set outputDir to also download it.',
     inputSchema: {
       prompt: z.string().min(3).max(1500).describe('Style brief in English: genre, mood, instruments, tempo, what it accompanies.'),
-      durationSec: z.number().int().min(5).max(380).default(60),
-      provider: z.enum(['minimax-music-3.0', 'stable-audio-3']).default('minimax-music-3.0'),
+      durationSec: z.number().int().min(5).max(300).default(60),
+      provider: z.enum(['minimax-music-3.0']).default('minimax-music-3.0'),
       instrumental: z.boolean().default(true).describe('false = with vocals (MiniMax only; give lyrics or let it write them).'),
       lyrics: z.string().max(3000).optional().describe('MiniMax with vocals: the lyrics, optionally with [Verse]/[Chorus]/[Bridge] tags.'),
-      format: z.enum(['mp3', 'wav']).default('mp3').describe('wav only on stable-audio-3.'),
       outputDir: z.string().optional().describe('Download the file into this local directory.'),
       filename: z.string().optional(),
     },
   }, guarded(async (a) => {
     const { data } = await client.post<{ url: string; durationSeconds: number; requestedSeconds: number; provider: string; credits: number; exactDuration: boolean }>('/api/ai/generate-music', {
-      prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: a.format,
+      prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: 'mp3',
     });
     let path: string | undefined;
     if (a.outputDir) {
