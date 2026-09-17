@@ -47,7 +47,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
+      'vivid_analyze_product', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
       'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -128,6 +128,33 @@ describe('vivid-mcp tools', () => {
     const list = await client.callTool({ name: 'vivid_list_references', arguments: { type: 'product' } });
     expect(JSON.parse(textOf(list))).toMatchObject({ count: 1, products: [{ name: 'Borsa Nera', assetId: 'p1' }], testimonials: [] });
   });
+
+  it('vivid_analyze_product uploads the photo, polls analyze-status and returns the saved product name', async () => {
+    let polls = 0;
+    routes.set('POST /api/ai/analyze-image', (init) => {
+      const fd = init.body as FormData;
+      expect(fd.get('locale')).toBe('it');
+      expect(fd.get('imageUrl')).toBe('https://cdn.test/bag.jpg');
+      return { status: 202, body: { success: true, data: { jobId: 'an1', status: 'processing' } } };
+    });
+    routes.set('GET /api/ai/analyze-status/an1', () => ({ body: { success: true, data: ++polls > 1
+      ? { status: 'completed', analysis: { title: 'Borsa Nera', category: 'bag', colors: ['black'] }, generatedAssetId: 'e1', originalAssetId: 'o1' }
+      : { status: 'processing' } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_analyze_product', arguments: { image: 'https://cdn.test/bag.jpg', timeoutSec: 20 } });
+    expect(JSON.parse(textOf(r))).toMatchObject({ status: 'completed', name: 'Borsa Nera', productAssetId: 'e1', analysis: { category: 'bag' }, hint: 'Use products: ["Borsa Nera"] in vivid_generate_image.' });
+  }, 20000);
+
+  it('vivid_create_testimonial from attributes posts JSON and returns the assigned name', async () => {
+    routes.set('POST /api/ai/create-testimonial-scratch', () => ({ status: 202, body: { success: true, data: { jobId: 't1', status: 'processing' } } }));
+    routes.set('GET /api/ai/testimonial-status/t1', () => ({ body: { success: true, data: { status: 'completed', personId: 'Lina', compositeAssetId: 'c1', description: { gender: 'Female' } } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_create_testimonial', arguments: { attributes: { gender: 'Female', age: '25-35', ethnicity: 'Mediterranean' }, timeoutSec: 30 } });
+    expect(calls.find((c) => c.path === '/api/ai/create-testimonial-scratch')!.body).toMatchObject({ attributes: { gender: 'Female' }, locale: 'it' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ status: 'completed', name: 'Lina', testimonialAssetId: 'c1' });
+    const bad = await client.callTool({ name: 'vivid_create_testimonial', arguments: { attributes: { gender: 'Female' } } });
+    expect(bad.isError).toBe(true);
+  }, 20000);
 
   it('vivid_generate_video returns the jobId without waiting and forwards routing fields', async () => {
     routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', taskId: 't1', estimatedTime: '60-120 secondi', creditsRemaining: 200, warning: 'frames folded' } } }));

@@ -74,6 +74,15 @@ export async function resolveReferences(client: VividClient, kind: MentionItem['
   return ids;
 }
 
+interface AnalyzeStatus {
+  status: string; error?: string | null; generatedAssetId?: string | null; originalAssetId?: string | null;
+  analysis?: { title?: string; description?: string; category?: string; colors?: unknown; material?: string; finish?: string; style?: string; keywords?: unknown } | null;
+}
+
+interface TestimonialStatus {
+  status: 'processing' | 'completed' | 'failed'; compositeAssetId?: string; personId?: string; description?: Record<string, unknown>; error?: string;
+}
+
 interface ImageGenResult {
   jobId: string; status: 'processing' | 'completed' | 'failed'; assetId?: string; downloadUrl?: string; error?: string;
   jobIds?: string[]; creditsRemaining?: number;
@@ -510,6 +519,88 @@ export function registerTools(server: McpServer, client: VividClient): void {
         ...(m.metadata && Object.keys(m.metadata).length ? { metadata: m.metadata } : {}),
       }));
     return json({ count: items.length, products: items.filter((i) => i.type === 'product'), testimonials: items.filter((i) => i.type === 'testimonial') });
+  }));
+
+  server.registerTool('vivid_analyze_product', {
+    title: 'Analyze a product photo (save as product)',
+    description: 'Run VIVID\'s "Analizza prodotto" on a product photo: vision analysis (name, category, colors, material, finish, style, keywords) + a clean e-commerce render, saved to the account as a PRODUCT you can then feature by name in vivid_generate_image `products` (see vivid_list_references). Free — counts toward the plan\'s monthly analysis quota (50/month on Free). Takes 30–90 s; waits by default. For jewelry the geometry lock may ask the app to confirm the category; the name comes from the analysis (rename in the app if needed).',
+    inputSchema: {
+      image: z.string().min(1).describe('Product photo: absolute local path (preferred — uploaded as multipart) or public URL (JPEG/PNG/WebP, max 30 MB; some CDNs such as Pexels refuse server-side downloads → use a local path).'),
+      description: z.string().max(1000).optional().describe('What the product is, to help the analysis (e.g. "silver bracelet with blue pearls").'),
+      locale: z.enum(['it', 'en', 'es']).default('it').describe('Language of the generated name/description.'),
+      wait: z.boolean().default(true),
+      timeoutSec: z.number().int().min(10).max(600).default(240),
+    },
+  }, guarded(async (a) => {
+    const form = new FormData();
+    if (/^https?:\/\//i.test(a.image)) form.append('imageUrl', a.image);
+    else { const f = await client.loadSource(a.image); form.append('image', f.blob, f.filename); }
+    if (a.description) form.append('description', a.description);
+    form.append('locale', a.locale);
+    const { data: started } = await client.post<{ jobId: string; status: string }>('/api/ai/analyze-image', form);
+    if (!a.wait) return json({ jobId: started.jobId, status: started.status, hint: 'Poll GET /api/ai/analyze-status/:jobId (vivid_job_status shows the job too).' });
+    const deadline = Date.now() + a.timeoutSec * 1000;
+    let last: AnalyzeStatus = { status: 'processing' };
+    while (Date.now() < deadline) {
+      await sleep(4000);
+      last = (await client.get<AnalyzeStatus>(`/api/ai/analyze-status/${started.jobId}`)).data;
+      if (last.status === 'completed' || last.status === 'failed') break;
+    }
+    const an = last.analysis ?? {};
+    return json({
+      jobId: started.jobId, status: last.status, error: last.error ?? undefined,
+      name: an.title, productAssetId: last.generatedAssetId ?? undefined, originalAssetId: last.originalAssetId ?? undefined,
+      analysis: last.analysis ? { category: an.category, description: an.description, colors: an.colors, material: an.material, finish: an.finish, style: an.style, keywords: an.keywords } : undefined,
+      downloadUrl: last.generatedAssetId ? client.url(`/api/assets/${last.generatedAssetId}/download`) : undefined,
+      hint: last.status === 'completed' && an.title ? `Use products: ["${an.title}"] in vivid_generate_image.` : undefined,
+    });
+  }));
+
+  server.registerTool('vivid_create_testimonial', {
+    title: 'Create a testimonial (AI model / persona)',
+    description: 'Create a reusable TESTIMONIAL on the account — a consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked). Two ways: `photos` = three photos of a REAL person (left profile, front, right profile) → composite identity (you must have that person\'s consent; it is recorded); or `attributes` = design the person from scratch (gender, age, ethnicity required; optional bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
+    inputSchema: {
+      photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe('Local paths or URLs of the three views of a real person.'),
+      attributes: z.record(z.string(), z.string()).optional().describe('From-scratch persona attributes (gender, age, ethnicity + optional look fields).'),
+      locale: z.enum(['it', 'en', 'es']).default('it'),
+      projectId: z.string().optional(),
+      wait: z.boolean().default(true),
+      timeoutSec: z.number().int().min(30).max(900).default(300),
+    },
+  }, guarded(async (a) => {
+    let jobId: string;
+    if (a.photos) {
+      const form = new FormData();
+      for (const view of ['left', 'front', 'right'] as const) {
+        const f = await client.loadSource(a.photos[view]);
+        form.append(view, f.blob, f.filename);
+      }
+      form.append('locale', a.locale);
+      if (a.projectId) form.append('projectId', a.projectId);
+      jobId = (await client.post<{ jobId: string }>('/api/ai/create-testimonial', form)).data.jobId;
+    } else if (a.attributes) {
+      for (const k of ['gender', 'age', 'ethnicity']) {
+        if (!a.attributes[k]) throw new VividApiError(`attributes.${k} is required`, 400);
+      }
+      jobId = (await client.post<{ jobId: string }>('/api/ai/create-testimonial-scratch', { attributes: a.attributes, locale: a.locale, projectId: a.projectId })).data.jobId;
+    } else {
+      throw new VividApiError('Pass either photos {left, front, right} or attributes {gender, age, ethnicity, …}', 400);
+    }
+    if (!a.wait) return json({ jobId, status: 'processing', hint: 'Poll GET /api/ai/testimonial-status/:jobId.' });
+    const deadline = Date.now() + a.timeoutSec * 1000;
+    let last: TestimonialStatus = { status: 'processing' };
+    while (Date.now() < deadline) {
+      await sleep(5000);
+      last = (await client.get<TestimonialStatus>(`/api/ai/testimonial-status/${jobId}`)).data;
+      if (last.status === 'completed' || last.status === 'failed') break;
+    }
+    return json({
+      jobId, status: last.status, error: last.error,
+      name: last.personId, testimonialAssetId: last.compositeAssetId,
+      description: last.description,
+      downloadUrl: last.compositeAssetId ? client.url(`/api/assets/${last.compositeAssetId}/download`) : undefined,
+      hint: last.status === 'completed' && last.personId ? `Use testimonials: ["${last.personId}"] in vivid_generate_image.` : undefined,
+    });
   }));
 
   // ── Voice (TTS) ──────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_share_asset` | Publish an asset and get a share link, toggle favorite |
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
 | `vivid_list_references` | Saved products (Analizza prodotto) and testimonials / characters with names and ids — use the names in `vivid_generate_image` `products` / `testimonials`, like #Product / @Testimonial in the app |
+| `vivid_analyze_product` · `vivid_create_testimonial` | Save a product from a photo (free, plan quota) or create a reusable testimonial from three photos or attributes (50 credits) — both then usable by name |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
 | `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT, Kimi (Wavespeed)  |
 | `vivid_generate_music` · `vivid_list_music_providers` | Unique track from a brief — MiniMax Music 3.0 (14 credits, vocals optional; length is a hint, trim in the editor) |

@@ -116,11 +116,8 @@ export class VividClient {
     return { bytes: buf, contentType: res.headers.get('content-type') ?? 'application/octet-stream' };
   }
 
-  /**
-   * Upload a local file or a remote URL to VIVID's temporary bucket and get
-   * back a public URL usable as start frame / reference / audio input.
-   */
-  async tempUpload(source: string): Promise<{ url: string; key: string }> {
+  /** Read a local file (absolute path) or fetch a URL into a Blob for multipart uploads. */
+  async loadSource(source: string): Promise<{ blob: Blob; filename: string; contentType: string }> {
     let bytes: Uint8Array;
     let contentType: string;
     let filename: string;
@@ -135,9 +132,18 @@ export class VividClient {
       contentType = guessContentType(source);
       filename = basename(source);
     }
-    const form = new FormData();
     // Node's Uint8Array is typed over ArrayBufferLike; Blob wants a plain ArrayBuffer view.
-    form.append('file', new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>], { type: contentType }), filename);
+    return { blob: new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>], { type: contentType }), filename, contentType };
+  }
+
+  /**
+   * Upload a local file or a remote URL to VIVID's temporary bucket and get
+   * back a public URL usable as start frame / reference / audio input.
+   */
+  async tempUpload(source: string): Promise<{ url: string; key: string }> {
+    const { blob, filename, contentType } = await this.loadSource(source);
+    const form = new FormData();
+    form.append('file', blob, filename);
     // Audio has its own endpoint (temp-upload only accepts images/videos).
     const endpoint = contentType.startsWith('audio/') ? '/api/ai/temp-audio-upload' : '/api/ai/temp-upload';
     const { data } = await this.post<{ url: string; key: string }>(endpoint, form);
