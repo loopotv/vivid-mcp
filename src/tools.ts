@@ -44,6 +44,36 @@ interface Asset {
   thumbUrl?: string;
 }
 
+interface MentionItem {
+  id: string; label: string; type: 'product' | 'testimonial'; assetId: string; metadata?: Record<string, unknown>; isPublic?: boolean;
+}
+
+/**
+ * Resolve saved products / testimonials given by name (case-insensitive,
+ * accents ignored, "#"/"@" prefix tolerated) or by asset id. Throws with the
+ * available names when something does not match.
+ */
+export async function resolveReferences(client: VividClient, kind: MentionItem['type'], wanted: string[] | undefined, projectId?: string): Promise<string[]> {
+  if (!wanted || wanted.length === 0) return [];
+  const { data } = await client.get<MentionItem[]>('/api/assets/mentionable', { project_id: projectId });
+  const pool = data.filter((m) => m.type === kind);
+  const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^[#@]/, '').replace(/[\s_-]+/g, ' ').trim().toLowerCase();
+  const ids: string[] = [];
+  const missing: string[] = [];
+  for (const w of wanted) {
+    const key = norm(w);
+    const hit = pool.find((m) => m.assetId === w || m.id === w)
+      ?? pool.find((m) => norm(m.label) === key)
+      ?? pool.find((m) => norm(m.label).includes(key) || key.includes(norm(m.label)));
+    if (hit) { if (!ids.includes(hit.assetId)) ids.push(hit.assetId); } else missing.push(w);
+  }
+  if (missing.length) {
+    const names = pool.map((m) => m.label).slice(0, 40).join(', ') || 'none';
+    throw new VividApiError(`${kind === 'product' ? 'Product' : 'Testimonial'} not found: ${missing.join(', ')}. Available ${kind}s: ${names}`, 404);
+  }
+  return ids;
+}
+
 interface ImageGenResult {
   jobId: string; status: 'processing' | 'completed' | 'failed'; assetId?: string; downloadUrl?: string; error?: string;
   jobIds?: string[]; creditsRemaining?: number;
@@ -222,7 +252,7 @@ export function registerTools(server: McpServer, client: VividClient): void {
 
   server.registerTool('vivid_generate_image', {
     title: 'Generate image',
-    description: 'Generate one or more images on VIVID from a text prompt. Optionally pass product / person / context reference image URLs (public URLs, e.g. from vivid_upload_file). Credits are charged per image according to the model. By default waits for completion and returns the asset ids and download URLs.',
+    description: 'Generate one or more images on VIVID from a text prompt. Feature saved products and testimonials by NAME with `products` / `testimonials` (same as the app\'s #Product / @Testimonial mentions — list them with vivid_list_references), or pass ad-hoc reference image URLs (public URLs, e.g. from vivid_upload_file). Credits are charged per image according to the model. By default waits for completion and returns the asset ids and download URLs.',
     inputSchema: {
       prompt: z.string().min(3).describe('What to generate. English works best.'),
       model: z.string().describe('Model slug from vivid_list_models (type=image), e.g. "nano-banana-2".'),
@@ -231,17 +261,25 @@ export function registerTools(server: McpServer, client: VividClient): void {
       resolution: z.string().optional().describe('Model-specific, e.g. "1K" | "2K" | "4K" when supported.'),
       quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Quality tier for models that price by quality (GPT Image 2 / 2.5): credits grow with quality × resolution — see creditRates in vivid_list_models (e.g. gpt-image-2.5 1K: low 4, medium 5, high 12, xhigh 19, max 39). Default: medium.'),
       style: z.string().optional().describe('Optional style preset slug.'),
-      objectImageUrls: z.array(z.string().url()).optional().describe('Product reference image URLs to preserve.'),
-      modelImageUrls: z.array(z.string().url()).optional().describe('Person / testimonial reference image URLs.'),
+      products: z.array(z.string()).optional().describe('Saved products to feature, by name (as in the app\'s "#" picker, e.g. "Borsa Nera") or asset id — see vivid_list_references. The product\'s look and geometry are locked like in the app.'),
+      testimonials: z.array(z.string()).optional().describe('Saved testimonials / characters to cast, by name (as in the app\'s "@" picker, e.g. "Lina") or asset id — see vivid_list_references. Identity is locked.'),
+      objectImageUrls: z.array(z.string().url()).optional().describe('Ad-hoc product reference image URLs (for products NOT saved in VIVID).'),
+      modelImageUrls: z.array(z.string().url()).optional().describe('Ad-hoc person reference image URLs (for people NOT saved as testimonials).'),
       contextImageUrls: z.array(z.string().url()).optional().describe('Scene / context reference image URLs.'),
       projectId: z.string().optional().describe('Attach the generation to a VIVID project.'),
       wait: z.boolean().default(true).describe('Wait for the generation to finish (polls up to timeoutSec).'),
       timeoutSec: z.number().int().min(10).max(600).default(180),
     },
   }, guarded(async (a) => {
+    const [objectImageIds, modelImageIds] = await Promise.all([
+      resolveReferences(client, 'product', a.products, a.projectId),
+      resolveReferences(client, 'testimonial', a.testimonials, a.projectId),
+    ]);
     const { data } = await client.post<ImageGenResult>('/api/ai/generate-image-v2', {
       prompt: a.prompt, model: a.model, aspectRatio: a.aspectRatio, numImages: a.numImages,
       resolution: a.resolution, quality: a.quality, style: a.style,
+      ...(objectImageIds.length ? { objectImageIds } : {}),
+      ...(modelImageIds.length ? { modelImageIds } : {}),
       objectImageUrls: a.objectImageUrls, modelImageUrls: a.modelImageUrls, contextImageUrls: a.contextImageUrls,
       projectId: a.projectId, source: 'mcp',
     });
@@ -447,6 +485,31 @@ export function registerTools(server: McpServer, client: VividClient): void {
   }, guarded(async ({ source }) => {
     const data = await client.tempUpload(source);
     return json(data);
+  }));
+
+  // ── Saved references (products / testimonials) ───────────────────────────
+
+  server.registerTool('vivid_list_references', {
+    title: 'List saved products and testimonials',
+    description: 'The account\'s saved PRODUCTS (from "Analizza prodotto": name, category, colors, material…) and TESTIMONIALS / characters (from "Crea testimonial": name, gender, age, look…) with their asset ids. Use the names in vivid_generate_image `products` / `testimonials` to feature them with locked look and identity — the same as typing #Product / @Testimonial in the app. Shared public talents are included (isPublic).',
+    inputSchema: {
+      type: z.enum(['product', 'testimonial', 'all']).default('all'),
+      projectId: z.string().optional().describe('Order the active project\'s products first.'),
+      query: z.string().optional().describe('Filter by name (substring, case-insensitive).'),
+    },
+    annotations: { readOnlyHint: true },
+  }, guarded(async (a) => {
+    const { data } = await client.get<MentionItem[]>('/api/assets/mentionable', { project_id: a.projectId });
+    const q = a.query?.trim().toLowerCase();
+    const items = data
+      .filter((m) => a.type === 'all' || m.type === a.type)
+      .filter((m) => !q || m.label.toLowerCase().includes(q))
+      .map((m) => ({
+        type: m.type, name: m.label, assetId: m.assetId, isPublic: m.isPublic || undefined,
+        downloadUrl: client.url(`/api/assets/${m.assetId}/download`),
+        ...(m.metadata && Object.keys(m.metadata).length ? { metadata: m.metadata } : {}),
+      }));
+    return json({ count: items.length, products: items.filter((i) => i.type === 'product'), testimonials: items.filter((i) => i.type === 'testimonial') });
   }));
 
   // ── Voice (TTS) ──────────────────────────────────────────────────────────

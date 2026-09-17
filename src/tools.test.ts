@@ -48,7 +48,7 @@ describe('vivid-mcp tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
-      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_voices',
+      'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
       'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
@@ -109,6 +109,25 @@ describe('vivid-mcp tools', () => {
       { jobId: 'j2', status: 'failed', error: 'boom' },
     ]);
   }, 20000);
+
+  it('vivid_generate_image resolves saved products / testimonials by name into asset ids', async () => {
+    routes.set('GET /api/assets/mentionable', () => ({ body: { success: true, data: [
+      { id: 'p1', label: 'Borsa Nera', type: 'product', assetId: 'p1', metadata: { category: 'bag' } },
+      { id: 't1', label: 'Lina', type: 'testimonial', assetId: 't1', metadata: { gender: 'female' }, isPublic: false },
+    ] } }));
+    routes.set('POST /api/ai/generate-image-v2', () => ({ status: 202, body: { success: true, data: { jobId: 'j1', status: 'processing', creditsRemaining: 10 } } }));
+    const client = await connect();
+    await client.callTool({ name: 'vivid_generate_image', arguments: { prompt: 'Lina holds the bag', model: 'nano-banana-2', products: ['#borsa nera'], testimonials: ['Lina'], wait: false } });
+    const req = calls.find((c) => c.path === '/api/ai/generate-image-v2')!;
+    expect(req.body).toMatchObject({ objectImageIds: ['p1'], modelImageIds: ['t1'] });
+
+    const bad = await client.callTool({ name: 'vivid_generate_image', arguments: { prompt: 'red shoe on a table', model: 'nano-banana-2', products: ['Scarpa Rossa'], wait: false } });
+    expect(bad.isError).toBe(true);
+    expect(textOf(bad)).toMatch(/Product not found: Scarpa Rossa. Available products: Borsa Nera/);
+
+    const list = await client.callTool({ name: 'vivid_list_references', arguments: { type: 'product' } });
+    expect(JSON.parse(textOf(list))).toMatchObject({ count: 1, products: [{ name: 'Borsa Nera', assetId: 'p1' }], testimonials: [] });
+  });
 
   it('vivid_generate_video returns the jobId without waiting and forwards routing fields', async () => {
     routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', taskId: 't1', estimatedTime: '60-120 secondi', creditsRemaining: 200, warning: 'frames folded' } } }));
