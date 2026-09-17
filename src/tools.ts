@@ -229,6 +229,7 @@ export function registerTools(server: McpServer, client: VividClient): void {
       aspectRatio: z.enum(['1:1', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '3:2', '2:3']).default('1:1'),
       numImages: z.number().int().min(1).max(4).default(1),
       resolution: z.string().optional().describe('Model-specific, e.g. "1K" | "2K" | "4K" when supported.'),
+      quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Quality tier for models that price by quality (GPT Image 2 / 2.5): credits grow with quality × resolution — see creditRates in vivid_list_models (e.g. gpt-image-2.5 1K: low 4, medium 5, high 12, xhigh 19, max 39). Default: medium.'),
       style: z.string().optional().describe('Optional style preset slug.'),
       objectImageUrls: z.array(z.string().url()).optional().describe('Product reference image URLs to preserve.'),
       modelImageUrls: z.array(z.string().url()).optional().describe('Person / testimonial reference image URLs.'),
@@ -240,7 +241,7 @@ export function registerTools(server: McpServer, client: VividClient): void {
   }, guarded(async (a) => {
     const { data } = await client.post<ImageGenResult>('/api/ai/generate-image-v2', {
       prompt: a.prompt, model: a.model, aspectRatio: a.aspectRatio, numImages: a.numImages,
-      resolution: a.resolution, style: a.style,
+      resolution: a.resolution, quality: a.quality, style: a.style,
       objectImageUrls: a.objectImageUrls, modelImageUrls: a.modelImageUrls, contextImageUrls: a.contextImageUrls,
       projectId: a.projectId, source: 'mcp',
     });

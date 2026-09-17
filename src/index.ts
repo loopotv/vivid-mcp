@@ -3,6 +3,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { VividClient, DEFAULT_API_URL } from './client.js';
 import { registerTools } from './tools.js';
+import { createRequire } from 'node:module';
+
+const { version: PKG_VERSION } = createRequire(import.meta.url)('../package.json') as { version: string };
 
 const apiKey = process.env.VIVID_API_KEY;
 if (!apiKey) {
@@ -22,7 +25,7 @@ if (!/^[\x21-\x7e]+$/.test(apiKey)) {
 const client = new VividClient({ apiKey, apiUrl: process.env.VIVID_API_URL ?? DEFAULT_API_URL });
 
 const server = new McpServer(
-  { name: 'vivid-mcp', version: '0.1.2' },
+  { name: 'vivid-mcp', version: PKG_VERSION },
   {
     instructions: [
       'VIVID is an AI content studio for e-commerce (vividai.tv). This server drives the account linked to VIVID_API_KEY.',
