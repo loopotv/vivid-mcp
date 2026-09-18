@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { VividClient, VividApiError, extensionFor, sleep } from './client.js';
-import { editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, subtitlesOf, type AiCommand, type MediaImport } from './editor.js';
+import { ensureBeatAnalysis, editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, subtitlesOf, type AiCommand, type MediaImport } from './editor.js';
 import { openHeadlessProject, projectSchemaV2 } from 'vivid-editor-core';
 import { resolveAssetUrl } from './editor.js';
 import { recordUi, siteFor, type RecordStep } from './recorder.js';
@@ -810,7 +810,7 @@ export function registerTools(server: McpServer, client: VividClient): void {
   // ── Video editor: timeline editing (vivid-editor-core, headless) ────────
 
   const COMMANDS_DOC = `Commands are the same AiCommand objects the VIVID Art Director uses: [{ "type", "payload" }].
-Timeline: ADD_CLIP {assetId, canvasObject?{x,y,w,h,rotation,opacity,blendMode}} (places the whole asset at the first free gap of a matching track; then trim it with UPDATE_CLIP) · UPDATE_CLIP {id, startMs?, durationMs?, sourceOffsetMs?, playbackRate?, volume?, opacity?} · REMOVE_CLIP {id} · SPLIT_CLIP {clipId, splitAtMs} · DUPLICATE_CLIP {id} · DETACH_AUDIO {clipId} · ADD_TRACK {type:'visual'|'audio'} · CUT_TO_BEAT {audioAssetId, ...} (needs beat analysis from the browser).
+Timeline: ADD_CLIP {assetId, canvasObject?{x,y,w,h,rotation,opacity,blendMode}} (places the whole asset at the first free gap of a matching track; then trim it with UPDATE_CLIP) · UPDATE_CLIP {id, startMs?, durationMs?, sourceOffsetMs?, playbackRate?, volume?, opacity?} · REMOVE_CLIP {id} · SPLIT_CLIP {clipId, splitAtMs} · DUPLICATE_CLIP {id} · DETACH_AUDIO {clipId} · ADD_TRACK {type:'visual'|'audio'} · CUT_TO_BEAT {audioClipId (an AUDIO clip id in the timeline), beatInterval (1–32: beats or peaks between cuts; 4 = one cut per bar), grid?: 'beats' (constant BPM grid, default) | 'peaks' (detected hits/accents — right for cuts "sui picchi", drops, voice, music without a steady tempo), minStrength? (grid peaks: 0–1, keep only hits ≥ it), mode?: 'redistribute' (default: re-slice all visual clips in order to fill the music) | 'snap' (only nudge existing edges), syncClips?: 'all' | [clipIds]} — the audio is analysed on the server automatically (free); to plan cuts by hand call vivid_analyze_audio and use its beats/peaks (ms) as UPDATE_CLIP boundaries.
 Look: SET_TRANSITION {clipId, edge:'in'|'out', type:'dissolve'|'fade-black' (visual) | 'crossfade'|'fade-in'|'fade-out' (audio), durationMs} · SET_CLIP_ANIMATION {clipId, phase:'in'|'out', type:'fade'|'slide-up'|'slide-down'|'zoom-in'|'zoom-out'|'zoom-pan'|'spin'|'blur-reveal', durationMs} · SET_CINEMATIC_LOOK {look} · SET_CANVAS_PRESET {id,label,width,height} (crop/reframe: landscape 1280x720, landscape-fhd 1920x1080, portrait 720x1280, portrait-fhd 1080x1920, square 1080x1080, social 864x1080) · UPDATE_CANVAS_OBJECT {id, x?, y?, w?, h?, rotation?, blendMode?}.
 Text: ADD_TEXT {text, startMs, endMs, x (0-1), y (0-1), fontFamily?, fontSize?, color?, animation?, fill?} · UPDATE_TEXT {id, ...} · REMOVE_TEXT {id}. fill = animated gradient on the glyphs: {type:'gradient', colors:['#ff6ec4','#7873f5','#4ade80','#facc15'], angle: 100, animate:'shift'|'none', speed?: periods/s (0.35)} — presets: iridescent, sunset, ocean, gold, candy (same colors as the in-app Fill picker).
 Subtitles (CapCut-style word-level captions): SET_SUBTITLES {cues:[{text, startMs, endMs, words?:[{word,startMs,endMs}]}] | null, templateId?:'outline-reveal'|'ugc-pop'|'karaoke-marker'|'cinematic-fade'|'neon-cyberpunk'|'playful-wiggle', position? (0 top – 100 bottom), styleOverrides?:{fontSize,color,highlightColor,…}, layout?:{x,y,scale,maxWidthPct,rotation}}. Get cues from vivid_transcribe (its cues[] carry per-word timing) on the voice/video asset; words are synthesized evenly when omitted.
@@ -826,6 +826,30 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     localId: z.string().optional().describe('Id to use inside the project (defaults to the asset id). Reference it in ADD_CLIP.assetId.'),
   });
   const commandsSchema = z.array(z.object({ type: z.string(), payload: z.record(z.string(), z.unknown()) }).passthrough());
+  const needsBeatAnalysis = (commands: Array<{ type: string }> | undefined) => !!commands?.some((c) => c.type === 'CUT_TO_BEAT');
+
+  server.registerTool('vivid_analyze_audio', {
+    title: 'Analyze audio: tempo (BPM) and peaks',
+    description: 'Tempo and transient analysis of a music / voice file, computed on the VIVID server (free, cached per asset). Returns bpm, firstBeatMs, the beat grid (beats[] / downbeats[] in ms from the start of the file, constant tempo) and peaks[] — the detected hits/accents/drops ({ms, strength 0–1}). Use beats for metronomic cuts and peaks for cuts on what the ear hears (dynamic montage, "tagli sui picchi"): pass them as clip boundaries (UPDATE_CLIP startMs/durationMs) or let CUT_TO_BEAT do it (grid beats|peaks). Input: VIVID asset id, public URL or local file (uploaded for you). MP3 or WAV only — convert other formats first (ffmpeg -c:a libmp3lame). First 90 s analysed by default.',
+    inputSchema: {
+      source: z.string().min(1).describe('Asset id (32 hex chars), http(s) URL, or local MP3/WAV path.'),
+      mode: z.enum(['bpm', 'peaks', 'both']).default('both'),
+      bpmHint: z.number().min(40).max(240).optional().describe('Known tempo; fixes half/double-tempo detections. A "128 BPM" in the file name is picked up automatically.'),
+      minGapMs: z.number().int().min(50).max(5000).optional().describe('Minimum distance between two peaks (default 250 ms). Raise it (600–1500) for fewer, bigger accents.'),
+      sensitivity: z.number().min(0).max(1).optional().describe('0 = only the strongest hits … 1 = every small transient (default 0.5).'),
+      maxSeconds: z.number().int().min(5).max(180).optional().describe('Seconds analysed from the start (default 90).'),
+    },
+    annotations: { readOnlyHint: true },
+  }, guarded(async (a) => {
+    const body: Record<string, unknown> = { mode: a.mode, bpmHint: a.bpmHint, minGapMs: a.minGapMs, sensitivity: a.sensitivity, maxSeconds: a.maxSeconds };
+    if (/^[a-f0-9]{32}$/i.test(a.source)) body.assetId = a.source;
+    else if (/^https?:\/\//i.test(a.source)) body.url = a.source;
+    else { body.url = (await client.tempUpload(a.source)).url; body.name = a.source.split(/[\\/]/).pop(); }
+    const { data } = await client.post<Record<string, unknown>>('/api/ai/audio-analysis', body);
+    const peaks = data.peaks as Array<{ ms: number; strength: number }> | undefined;
+    return json({ ...data, strongPeaks: peaks?.filter((p) => p.strength >= 0.6).map((p) => p.ms),
+      hint: 'beats/peaks are ms from the start of the FILE; on the timeline add the audio clip startMs and subtract its sourceOffsetMs.' });
+  }));
 
   async function addMedia(editor: { store: { getState: () => { addAsset: (a: import('vivid-editor-core').AssetClip) => void; assetLibrary: Array<{ id: string }> } } }, media: MediaImport[] | undefined) {
     const added: Array<{ id: string; name: string; mediaType: string; durationMs: number }> = [];
@@ -865,12 +889,13 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     const file = newProject(a.name, a.canvasPreset);
     const editor = openHeadlessProject(file, { resolveUrl: resolveAssetUrl(client) });
     const imported = await addMedia(editor, a.media);
+    const audioAnalysis = needsBeatAnalysis(a.commands) ? await ensureBeatAnalysis(client, editor) : undefined;
     const result = a.commands?.length ? editor.apply(a.commands as unknown as AiCommand[]) : { applied: 0, errors: [], created: undefined };
     const out = editor.toProjectFile();
     const check = projectSchemaV2.safeParse(out);
     if (!check.success) throw new VividApiError(`Project failed validation before save: ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);
     const { assetId } = await saveProject(client, out, a.name);
-    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { subtitles: subtitlesOf(editor) }) });
+    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, audioAnalysis, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { subtitles: subtitlesOf(editor) }) });
   }));
 
   server.registerTool('vivid_edit_timeline', {
@@ -885,6 +910,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
   }, guarded(async (a) => {
     const { editor } = await loadProject(client, a.projectAssetId);
     const imported = await addMedia(editor, a.media);
+    const audioAnalysis = needsBeatAnalysis(a.commands) ? await ensureBeatAnalysis(client, editor) : undefined;
     const result = editor.apply(a.commands as unknown as AiCommand[]);
     const out = editor.toProjectFile();
     const check = projectSchemaV2.safeParse(out);
@@ -894,7 +920,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       await saveProject(client, out, out.projectName || 'Editor Project', a.projectAssetId);
       saved = true;
     }
-    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }) });
+    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, audioAnalysis, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }) });
   }));
 
   server.registerTool('vivid_render_project', {

@@ -47,7 +47,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_analyze_product', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
+      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
       'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -363,5 +363,76 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_list_models', arguments: { type: 'llm' } })));
     expect(out[0].slug).toBe('grok-4.6');
+  });
+});
+
+describe('audio analysis (server-side beats + peaks)', () => {
+  const V = 'b'.repeat(32);
+  const M = 'c'.repeat(32);
+  const P = 'd'.repeat(32);
+  let savedProject: Record<string, unknown> | undefined;
+  const analysis = {
+    bpm: 120, firstBeatMs: 0, beats: Array.from({ length: 17 }, (_, i) => i * 500), downbeats: [0, 2000, 4000, 6000, 8000], source: 'detected', bpmConfidence: 0.8,
+    peaks: [{ ms: 0, strength: 1 }, { ms: 700, strength: 0.9 }, { ms: 1900, strength: 0.2 }, { ms: 3100, strength: 0.8 }, { ms: 5400, strength: 0.7 }, { ms: 7900, strength: 0.95 }],
+    analyzedDurationMs: 8000, sampleRate: 44100, cached: false,
+  };
+  const wire = () => {
+    routes.set(`GET /api/assets/${V}`, () => ({ body: { success: true, data: { id: V, type: 'video', filename: 'hero.mp4', duration_sec: 20, metadata: '{"width":1080,"height":1920}', created_at: 'now' } } }));
+    routes.set(`GET /api/assets/${M}`, () => ({ body: { success: true, data: { id: M, type: 'audio', filename: 'song.mp3', duration_sec: 8, metadata: '{}', created_at: 'now' } } }));
+    routes.set('POST /api/ai/audio-analysis', () => ({ body: { success: true, data: { ...analysis, assetId: M } } }));
+    routes.set('POST /api/ai/save-editor-project', (init) => { savedProject = (JSON.parse(String(init.body)) as { projectData: Record<string, unknown> }).projectData; return { body: { success: true, data: { assetId: P, r2Key: 'k' } } }; });
+    routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
+  };
+
+  it('vivid_analyze_audio returns bpm, beats, peaks and the strong-peak shortlist', async () => {
+    wire();
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_analyze_audio', arguments: { source: M, minGapMs: 400 } })));
+    expect(out.bpm).toBe(120);
+    expect(out.peaks).toHaveLength(6);
+    expect(out.strongPeaks).toEqual([0, 700, 3100, 5400, 7900]);
+    const call = calls.find((c) => c.path === '/api/ai/audio-analysis');
+    expect(call?.body).toMatchObject({ assetId: M, mode: 'both', minGapMs: 400 });
+  });
+
+  it('CUT_TO_BEAT fetches the analysis on the server and cuts on beats or peaks headless', async () => {
+    wire();
+    const client = await connect();
+    const created = JSON.parse(textOf(await client.callTool({ name: 'vivid_create_editor_project', arguments: {
+      name: 'Beat', media: [{ source: V }, { source: M }],
+      commands: [{ type: 'ADD_TRACK', payload: { type: 'audio' } }, { type: 'ADD_CLIP', payload: { assetId: V } }, { type: 'ADD_CLIP', payload: { assetId: M } }],
+    } })));
+    expect(created.errors).toEqual([]);
+    expect(created.audioAnalysis).toBeUndefined(); // no CUT_TO_BEAT in the batch → no analysis call
+    const audioClip = (created.timeline.clips as Array<{ id: string; mediaType: string }>).find((c) => c.mediaType === 'audio')!;
+    expect(new Set((created.timeline.clips as Array<{ id: string }>).map((c) => c.id)).size).toBe(2); // ids unique within one batch
+
+    calls.length = 0;
+    const cut = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [
+      { type: 'CUT_TO_BEAT', payload: { audioClipId: audioClip.id, beatInterval: 1, grid: 'peaks', minStrength: 0.5 } },
+    ] } })));
+    expect(cut.errors).toEqual([]);
+    expect(cut.audioAnalysis).toEqual([{ assetId: M, serverAssetId: M, bpm: 120, firstBeatMs: 0, beats: 17, peaks: 6 }]);
+    expect(calls.filter((c) => c.path === '/api/ai/audio-analysis')).toHaveLength(1);
+    const starts = (cut.timeline.clips as Array<{ mediaType: string; startMs: number }>).filter((c) => c.mediaType === 'video').map((c) => c.startMs).sort((a, b) => a - b);
+    expect(starts).toEqual([0, 700, 3100, 5400, 7900]);
+    expect(cut.saved).toBe(true);
+  });
+
+  it('reports a failed analysis per asset instead of throwing', async () => {
+    wire();
+    routes.set('POST /api/ai/audio-analysis', () => ({ status: 415, body: { success: false, error: 'Unsupported audio format "audio/mp4"' } }));
+    const client = await connect();
+    const created = JSON.parse(textOf(await client.callTool({ name: 'vivid_create_editor_project', arguments: {
+      name: 'Beat', media: [{ source: V }, { source: M }],
+      commands: [{ type: 'ADD_TRACK', payload: { type: 'audio' } }, { type: 'ADD_CLIP', payload: { assetId: V } }, { type: 'ADD_CLIP', payload: { assetId: M } }],
+    } })));
+    const audioClip = (created.timeline.clips as Array<{ id: string; mediaType: string }>).find((c) => c.mediaType === 'audio')!;
+    const cut = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, dryRun: true, commands: [
+      { type: 'CUT_TO_BEAT', payload: { audioClipId: audioClip.id, beatInterval: 4 } },
+    ] } })));
+    expect(cut.audioAnalysis[0].error).toMatch(/Unsupported audio format/);
+    expect(cut.errors[0]).toMatch(/no beat analysis/);
+    expect(cut.saved).toBe(false);
   });
 });

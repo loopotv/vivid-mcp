@@ -14,6 +14,7 @@ import {
   CANVAS_PRESETS, emptyProjectFile, openHeadlessProject,
   type AiCommand, type AssetClip, type EditorState, type HeadlessEditor, type ProjectFile,
 } from 'vivid-editor-core';
+import type { BeatAnalysis } from 'vivid-editor-core';
 import { VividClient, VividApiError, guessContentType } from './client.js';
 
 const ASSET_ID = /^[a-f0-9]{32}$/i;
@@ -169,6 +170,60 @@ export async function importMedia(client: VividClient, m: MediaImport): Promise<
     intrinsicHeight: height,
     serverAssetId: assetId,
   };
+}
+
+// ── Beat / peak analysis (server-side) ─────────────────────────────────────
+
+export interface AudioAnalysisData {
+  bpm?: number;
+  firstBeatMs?: number;
+  beats?: number[];
+  downbeats?: number[];
+  source?: string;
+  bpmConfidence?: number;
+  peaks?: Array<{ ms: number; strength: number }>;
+  analyzedDurationMs: number;
+  sampleRate?: number;
+  cached?: boolean;
+  name?: string;
+}
+
+export interface AudioAnalysisSummary { assetId: string; serverAssetId?: string; bpm?: number; firstBeatMs?: number; beats?: number; peaks?: number; error?: string }
+
+const ASSET_ID_RE = /^[a-f0-9]{32}$/i;
+
+/**
+ * Fetch tempo + peaks for every audio asset in the library that has none yet
+ * (POST /api/ai/audio-analysis, free, KV-cached) and put them in the store,
+ * so CUT_TO_BEAT (grid 'beats' | 'peaks') works headless exactly as in the
+ * browser. Failures are reported per asset, never thrown.
+ */
+export async function ensureBeatAnalysis(client: VividClient, editor: HeadlessEditor, opts: { force?: boolean } = {}): Promise<AudioAnalysisSummary[]> {
+  const out: AudioAnalysisSummary[] = [];
+  for (const a of editor.store.getState().assetLibrary) {
+    if (a.mediaType !== 'audio') continue;
+    const existing = editor.store.getState().audioBeatsByAssetId[a.id];
+    if (!opts.force && existing && typeof existing === 'object' && existing.peaks) {
+      out.push({ assetId: a.id, serverAssetId: a.serverAssetId, bpm: existing.bpm, firstBeatMs: existing.firstBeatMs, beats: existing.beats.length, peaks: existing.peaks.length });
+      continue;
+    }
+    const serverAssetId = a.serverAssetId ?? (ASSET_ID_RE.test(a.id) ? a.id : undefined);
+    if (!serverAssetId) { out.push({ assetId: a.id, error: 'not a VIVID asset — import it with media[] first' }); continue; }
+    try {
+      editor.store.getState().setAudioBeatsStatus(a.id, 'analyzing');
+      const { data } = await client.post<AudioAnalysisData>('/api/ai/audio-analysis', { assetId: serverAssetId, mode: 'both', name: a.name });
+      const analysis: BeatAnalysis = {
+        bpm: data.bpm ?? 0, firstBeatMs: data.firstBeatMs ?? 0, beats: data.beats ?? [], downbeats: data.downbeats ?? [],
+        source: 'server', analyzedDurationMs: data.analyzedDurationMs, peaks: data.peaks ?? [], bpmConfidence: data.bpmConfidence,
+      };
+      editor.store.getState().setAudioBeatsStatus(a.id, analysis);
+      out.push({ assetId: a.id, serverAssetId, bpm: data.bpm, firstBeatMs: data.firstBeatMs, beats: analysis.beats.length, peaks: analysis.peaks!.length });
+    } catch (err) {
+      editor.store.getState().setAudioBeatsStatus(a.id, 'failed');
+      out.push({ assetId: a.id, serverAssetId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
 }
 
 // ── Project I/O ────────────────────────────────────────────────────────────
