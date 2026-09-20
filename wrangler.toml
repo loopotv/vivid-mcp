@@ -1,0 +1,17 @@
+# Remote vivid-mcp: the same tools as `npx -y vivid-mcp`, served over
+# Streamable HTTP from a Cloudflare Worker — nothing to install, no Node on
+# the user's machine. Auth: `Authorization: Bearer vk_…` (or X-API-Key) with
+# the user's VIVID API key on every request; stateless, one MCP server per
+# request. Deploy: `npm run deploy:remote` (Cloudflare account of vividai.tv).
+name = "vivid-mcp-remote"
+main = "src/worker.ts"
+compatibility_date = "2026-09-15"
+compatibility_flags = ["nodejs_compat"]
+
+routes = [{ pattern = "mcp.vividai.tv", custom_domain = true }]
+
+[vars]
+VIVID_API_URL = "https://vivid-api.vividoai.workers.dev"
+
+[observability]
+enabled = true

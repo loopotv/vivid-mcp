@@ -1,6 +1,3 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -8,7 +5,6 @@ import { VividClient, VividApiError, extensionFor, sleep } from './client.js';
 import { ensureBeatAnalysis, editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, subtitlesOf, type AiCommand, type MediaImport } from './editor.js';
 import { openHeadlessProject, projectSchemaV2 } from 'vivid-editor-core';
 import { resolveAssetUrl } from './editor.js';
-import { recordUi, siteFor, type RecordStep } from './recorder.js';
 
 // ── API shapes (subset we surface) ─────────────────────────────────────────
 
@@ -103,17 +99,17 @@ interface RenderJob {
   downloadUrl?: string; error: string | null; openUrl: string; createdAt: string;
 }
 
-/** Open a URL in the default browser (best effort, never throws). */
-function openInBrowser(url: string): boolean {
-  try {
-    const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
-      : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
-      : ['xdg-open', [url]];
-    const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-    child.on('error', () => {});
-    child.unref();
-    return true;
-  } catch { return false; }
+/**
+ * What only a server running on the user's machine can do. The stdio server
+ * passes the Node implementation (see tools-local.ts); the remote Worker
+ * passes nothing, and the tools then skip local side effects (outputDir /
+ * outputPath are ignored, vivid_download_asset is not registered).
+ */
+export interface LocalIo {
+  mkdir(dir: string): Promise<void>;
+  writeFile(path: string, data: Uint8Array | string): Promise<void>;
+  join(...parts: string[]): string;
+  openInBrowser(url: string): boolean;
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -201,7 +197,7 @@ async function pollUntilDone(
 
 // ── registration ───────────────────────────────────────────────────────────
 
-export function registerTools(server: McpServer, client: VividClient): void {
+export function registerTools(server: McpServer, client: VividClient, io?: LocalIo): void {
   const abs = (p?: string) => (p ? client.url(p) : undefined);
 
   server.registerTool('vivid_whoami', {
@@ -446,6 +442,7 @@ export function registerTools(server: McpServer, client: VividClient): void {
     });
   }));
 
+  if (io) {
   server.registerTool('vivid_download_asset', {
     title: 'Download asset',
     description: 'Download an asset (image / video) to a local directory and return the saved path.',
@@ -457,13 +454,14 @@ export function registerTools(server: McpServer, client: VividClient): void {
   }, guarded(async ({ assetId, outputDir, filename }) => {
     const { data: meta } = await client.get<Asset>(`/api/assets/${assetId}`);
     const { bytes, contentType } = await client.download(`/api/assets/${assetId}/download`);
-    await mkdir(outputDir, { recursive: true });
+    await io!.mkdir(outputDir);
     let name = filename ?? meta.filename ?? assetId;
     if (!/\.[a-z0-9]{2,4}$/i.test(name)) name = `${name}.${extensionFor(contentType)}`;
-    const path = join(outputDir, name);
-    await writeFile(path, bytes);
+    const path = io!.join(outputDir, name);
+    await io!.writeFile(path, bytes);
     return json({ path, bytes: bytes.byteLength, contentType });
   }));
+  }
 
   server.registerTool('vivid_share_asset', {
     title: 'Share / unshare asset',
@@ -640,11 +638,11 @@ export function registerTools(server: McpServer, client: VividClient): void {
       provider: a.provider, text: a.text, locale: a.locale, voice: a.voice, speed: a.speed, emotion: a.emotion, referenceAudioUrl, referenceText: a.referenceText,
     });
     let path: string | undefined;
-    if (a.outputDir) {
+    if (a.outputDir && io) {
       const { bytes } = await client.download(data.url);
-      await mkdir(a.outputDir, { recursive: true });
-      path = join(a.outputDir, a.filename ?? `voice_${Date.now()}.mp3`);
-      await writeFile(path, bytes);
+      await io.mkdir(a.outputDir);
+      path = io.join(a.outputDir, a.filename ?? `voice_${Date.now()}.mp3`);
+      await io.writeFile(path, bytes);
     }
     return json({ url: data.url, provider: data.provider, credits: data.credits, path });
   }));
@@ -678,12 +676,12 @@ export function registerTools(server: McpServer, client: VividClient): void {
       prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: 'mp3',
     });
     let path: string | undefined;
-    if (a.outputDir) {
+    if (a.outputDir && io) {
       const { bytes } = await client.download(data.url);
-      await mkdir(a.outputDir, { recursive: true });
+      await io.mkdir(a.outputDir);
       const ext = data.url.endsWith('.wav') ? 'wav' : 'mp3';
-      path = join(a.outputDir, a.filename ?? `music_${Date.now()}.${ext}`);
-      await writeFile(path, bytes);
+      path = io.join(a.outputDir, a.filename ?? `music_${Date.now()}.${ext}`);
+      await io.writeFile(path, bytes);
     }
     return json({ ...data, path });
   }));
@@ -721,9 +719,9 @@ export function registerTools(server: McpServer, client: VividClient): void {
       return json(data);
     }
     const text = await client.postText('/api/ai/transcribe', body);
-    if (a.outputPath) {
-      await writeFile(a.outputPath, text, 'utf8');
-      return json({ path: a.outputPath, format: a.format, granularity: a.granularity, bytes: Buffer.byteLength(text) });
+    if (a.outputPath && io) {
+      await io.writeFile(a.outputPath, text);
+      return json({ path: a.outputPath, format: a.format, granularity: a.granularity, bytes: new TextEncoder().encode(text).byteLength });
     }
     return { content: [{ type: 'text', text }] };
   }));
@@ -761,11 +759,11 @@ export function registerTools(server: McpServer, client: VividClient): void {
     }
     const { data } = await client.post<Record<string, unknown> & { assetId: string; downloadUrl: string }>('/api/ai/retouch', body);
     let path: string | undefined;
-    if (a.outputDir) {
+    if (a.outputDir && io) {
       const { bytes } = await client.download(data.downloadUrl);
-      await mkdir(a.outputDir, { recursive: true });
-      path = join(a.outputDir, `${(a.filename ?? 'retouch').replace(/\.[a-z0-9]+$/i, '')}_${data.assetId.slice(0, 8)}.png`);
-      await writeFile(path, bytes);
+      await io.mkdir(a.outputDir);
+      path = io.join(a.outputDir, `${(a.filename ?? 'retouch').replace(/\.[a-z0-9]+$/i, '')}_${data.assetId.slice(0, 8)}.png`);
+      await io.writeFile(path, bytes);
     }
     return json({ ...data, downloadUrl: abs(data.downloadUrl), path });
   }));
@@ -935,7 +933,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     },
   }, guarded(async (a) => {
     const { data: job } = await client.post<RenderJob>('/api/render-jobs', { projectAssetId: a.projectAssetId, name: a.name });
-    const opened = a.openBrowser ? openInBrowser(job.openUrl) : false;
+    const opened = a.openBrowser && io ? io.openInBrowser(job.openUrl) : false;
     if (!a.wait) {
       return json({ renderJobId: job.id, status: job.status, openUrl: job.openUrl, opened, hint: opened
         ? 'The editor is rendering in your browser — poll vivid_render_status.'
@@ -961,52 +959,5 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     const { data: j } = await client.get<RenderJob>(`/api/render-jobs/${renderJobId}`);
     return json({ renderJobId: j.id, status: j.status, progress: j.progress, executor: j.executor, projectAssetId: j.projectAssetId,
       outputAssetId: j.outputAssetId, downloadUrl: abs(j.downloadUrl), error: j.error, openUrl: j.openUrl, createdAt: j.createdAt });
-  }));
-
-  // ── UI recording (Playwright, local) ─────────────────────────────────────
-
-  const recordStepSchema = z.object({
-    action: z.enum(['goto', 'click', 'hover', 'move', 'type', 'fill', 'press', 'scroll', 'wait', 'hide', 'evaluate'])
-      .describe('goto(url) · click/hover/move(selector or x,y) · type(selector, text, delayMs — keystroke by keystroke) · fill(selector, text — instant) · press(key, e.g. "Enter") · scroll(deltaY in px, or selector to scroll into view) · wait(ms, or selector until visible) · hide(selector) · evaluate(script).'),
-    url: z.string().optional().describe('goto: absolute URL or a path on the site (e.g. "/create").'),
-    selector: z.string().optional().describe('Playwright selector: CSS, "text=Genera", "[data-testid=onboarding-skip]", "role=button[name=\'Crea\']".'),
-    text: z.string().optional(),
-    key: z.string().optional(),
-    x: z.number().optional().describe('CSS px inside the viewport (click/move without selector).'),
-    y: z.number().optional(),
-    deltaY: z.number().optional().describe('scroll: pixels, negative scrolls up (default 500).'),
-    ms: z.number().int().min(0).max(60_000).optional().describe('wait: pause in ms (default 1000) or timeout for the selector.'),
-    delayMs: z.number().int().min(0).max(1000).optional().describe('type: delay between keystrokes (default 45).'),
-    script: z.string().optional().describe('evaluate: JavaScript run in the page.'),
-    waitMs: z.number().int().min(0).max(60_000).optional().describe('Pause after the action (default 600).'),
-    optional: z.boolean().optional().describe('Skip this step (warning) instead of failing when its selector is not visible within ms (default 3000) — e.g. a one-time onboarding dialog.'),
-  });
-
-  server.registerTool('vivid_record_ui', {
-    title: 'Record a UI walkthrough (screen recording)',
-    description: `Record a screen-capture video of vividai.tv (or any site) by driving a local Chromium with Playwright: a scripted list of steps (navigate, move, click, type, scroll, wait) is executed with a visible cursor, smooth mouse moves and click ripples, and the result is uploaded to VIVID as a video asset ready for vivid_create_editor_project / vivid_edit_timeline (pass the returned durationMs as media[].durationMs). The browser is logged into the account of VIVID_API_KEY automatically (login=true), so app pages open directly. Runs on THIS machine: needs Google Chrome (or \`npx playwright install chromium\`) and, for mp4 output, ffmpeg (otherwise webm, which the editor handles). Default site: ${siteFor(client)}. Tips: onboarding on /create can be skipped with click "[data-testid=onboarding-skip]"; keep clips short (one feature per recording) and slow the pace with waitMs. Costs no credits.`,
-    inputSchema: {
-      steps: z.array(recordStepSchema).min(1).max(80),
-      url: z.string().optional().describe('Start URL or site path (default "/dashboard").'),
-      site: z.string().optional().describe('Site origin to record and log into (default vividai.tv; use https://stage.vividai.tv for staging).'),
-      login: z.boolean().default(true).describe('Seed the browser with a session of the API-key account before opening the site.'),
-      viewport: z.object({ width: z.number().int().min(320).max(3840), height: z.number().int().min(320).max(2160) }).optional().describe('CSS viewport (default 1440×900). Use 390×844 for a phone.'),
-      scale: z.number().int().min(1).max(3).default(2).describe('Device scale factor: 2 records 1440×900 as a crisp 2880×1800.'),
-      cursor: z.boolean().default(true).describe('Draw a cursor with click ripples.'),
-      hideSelectors: z.array(z.string()).optional().describe('CSS selectors hidden for the whole recording (banners, chat widgets).'),
-      leadInMs: z.number().int().min(0).max(10_000).default(800).describe('Still time after the first page loads.'),
-      tailMs: z.number().int().min(0).max(10_000).default(1200).describe('Still time before stopping.'),
-      format: z.enum(['auto', 'mp4', 'webm']).default('auto').describe('auto = mp4 when ffmpeg is installed, else webm.'),
-      colorScheme: z.enum(['dark', 'light']).default('dark'),
-      locale: z.string().default('it-IT'),
-      headless: z.boolean().default(true).describe('false shows the browser window while recording.'),
-      stepTimeoutMs: z.number().int().min(1000).max(120_000).default(15_000),
-      upload: z.boolean().default(true).describe('Upload to VIVID as a permanent video asset.'),
-      outputPath: z.string().optional().describe('Also save the video to this absolute local path.'),
-      name: z.string().optional().describe('Asset file name (without extension).'),
-    },
-  }, guarded(async (a) => {
-    const result = await recordUi(client, { ...a, steps: a.steps as RecordStep[] });
-    return json(result);
   }));
 }

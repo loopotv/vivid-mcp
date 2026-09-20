@@ -1,6 +1,6 @@
 {
   "name": "vivid-mcp",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "MCP server for VIVID (vividai.tv): generate images, videos, voice and music, edit timelines, record UI walkthroughs, browse your assets and jobs from Claude, Cursor or any MCP client.",
   "type": "module",
   "bin": {
@@ -21,7 +21,9 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "deploy:remote": "wrangler deploy",
+    "dev:remote": "wrangler dev"
   },
   "keywords": [
     "mcp",
@@ -48,7 +50,8 @@
     "@types/node": "^26.4.1",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.50.0"
   },
   "optionalDependencies": {
     "playwright-core": "^1.63.0"

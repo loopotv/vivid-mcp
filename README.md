@@ -36,7 +36,35 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 ## Setup
 
 1. Get an API key: sign in on [vividai.tv](https://vividai.tv) → **Settings** → **API key**.
-2. Add the server to your MCP client. Node.js 20+ is required.
+2. Connect your client. Three ways, pick one:
+
+| | How | Needs Node? | Local-only tools (`vivid_download_asset`, `vivid_record_ui`, local paths) |
+|---|---|---|---|
+| **Remote** | `https://mcp.vividai.tv/mcp` + `Authorization: Bearer vk_…` | no | no |
+| **Claude Desktop extension** | download [`vivid-mcp.mcpb`](https://vividai.tv/downloads/vivid-mcp.mcpb), double-click, paste the key | no (bundled runtime) | yes |
+| **Local (npx)** | `npx -y vivid-mcp` with `VIVID_API_KEY` | Node.js 20+ | yes |
+
+### Remote (nothing to install)
+
+The same server runs as a Cloudflare Worker at `https://mcp.vividai.tv/mcp` (Streamable HTTP, stateless). Send your API key on every request:
+
+```bash
+# Claude Code
+claude mcp add --transport http vivid https://mcp.vividai.tv/mcp --header "Authorization: Bearer vk_xxx"
+```
+
+```json
+// Cursor and other clients that take a URL + headers
+{ "mcpServers": { "vivid": { "url": "https://mcp.vividai.tv/mcp", "headers": { "Authorization": "Bearer vk_xxx" } } } }
+```
+
+`GET https://mcp.vividai.tv/` answers with the version and the endpoint. Files must be public URLs (`vivid_upload_file` accepts a URL); `outputDir` / `outputPath` are ignored. Claude.ai and Claude Desktop "custom connectors" require OAuth, which this endpoint does not offer yet — use the extension there.
+
+### Claude Desktop (one-click extension)
+
+Download [vivid-mcp.mcpb](https://vividai.tv/downloads/vivid-mcp.mcpb) and open it with Claude Desktop: it installs the server with its own Node runtime and asks for your API key (stored by Claude as a secret). Built with `npm run build && npx @anthropic-ai/mcpb pack` from `manifest.json`.
+
+### Local (npx, Node.js 20+)
 
 ### Claude Code
 

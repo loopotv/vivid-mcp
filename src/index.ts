@@ -3,9 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { VividClient, DEFAULT_API_URL } from './client.js';
 import { registerTools } from './tools.js';
-import { createRequire } from 'node:module';
-
-const { version: PKG_VERSION } = createRequire(import.meta.url)('../package.json') as { version: string };
+import { nodeIo, readLocalFile, registerLocalTools } from './tools-local.js';
+import { VERSION, INSTRUCTIONS, LOCAL_INSTRUCTIONS } from './meta.js';
 
 const apiKey = process.env.VIVID_API_KEY;
 if (!apiKey) {
@@ -22,22 +21,12 @@ if (!/^[\x21-\x7e]+$/.test(apiKey)) {
   process.exit(1);
 }
 
-const client = new VividClient({ apiKey, apiUrl: process.env.VIVID_API_URL ?? DEFAULT_API_URL });
+const client = new VividClient({ apiKey, apiUrl: process.env.VIVID_API_URL ?? DEFAULT_API_URL, readLocal: readLocalFile });
 
-const server = new McpServer(
-  { name: 'vivid-mcp', version: PKG_VERSION },
-  {
-    instructions: [
-      'VIVID is an AI content studio for e-commerce (vividai.tv). This server drives the account linked to VIVID_API_KEY.',
-      'Typical flow: vivid_whoami → vivid_list_models → vivid_generate_image / vivid_generate_video → vivid_job_status → vivid_download_asset or vivid_share_asset.',
-      'Local files must be uploaded with vivid_upload_file before being used as references, frames or audio.',
-      'Every generation costs credits; the models list shows the price. Check credits with vivid_whoami before large batches.',
-      'vivid_record_ui screen-records a scripted walkthrough of vividai.tv with a local Chromium (no credits) and uploads it as a video asset for the timeline tools.',
-    ].join(' '),
-  },
-);
+const server = new McpServer({ name: 'vivid-mcp', version: VERSION }, { instructions: INSTRUCTIONS + LOCAL_INSTRUCTIONS });
 
-registerTools(server, client);
+registerTools(server, client, nodeIo);
+registerLocalTools(server, client);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

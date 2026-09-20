@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { VividClient } from './client.js';
 import { registerTools } from './tools.js';
+import { nodeIo, readLocalFile, registerLocalTools } from './tools-local.js';
 
 /** Minimal fake of the VIVID API: route → handler. */
 type Handler = (init: RequestInit, url: URL) => { status?: number; body: unknown; raw?: boolean };
@@ -27,7 +28,9 @@ const fetchMock = vi.fn(async (input: string | URL | Request, init: RequestInit 
 
 async function connect() {
   const server = new McpServer({ name: 'test', version: '0.0.0' });
-  registerTools(server, new VividClient({ apiKey: 'vivid_test', apiUrl: 'https://api.test', fetchImpl: fetchMock }));
+  const api = new VividClient({ apiKey: 'vivid_test', apiUrl: 'https://api.test', fetchImpl: fetchMock, readLocal: readLocalFile });
+  registerTools(server, api, nodeIo);
+  registerLocalTools(server, api);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: 'test-client', version: '0.0.0' });

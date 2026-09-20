@@ -8,8 +8,6 @@
  * foreign URLs are uploaded through /api/ai/save-editor-media first.
  */
 
-import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
 import {
   CANVAS_PRESETS, emptyProjectFile, openHeadlessProject,
   type AiCommand, type AssetClip, type EditorState, type HeadlessEditor, type ProjectFile,
@@ -114,22 +112,13 @@ export async function importMedia(client: VividClient, m: MediaImport): Promise<
   if (ASSET_ID.test(m.source)) {
     assetId = m.source;
   } else {
-    let bytes: Uint8Array; let contentType: string; let filename: string;
-    if (/^https?:\/\//i.test(m.source)) {
-      const own = /\/api\/assets\/([a-f0-9]{32})\//i.exec(m.source);
-      if (own) { assetId = own[1]; return importMedia(client, { ...m, source: assetId }); }
-      const res = await fetch(m.source);
-      if (!res.ok) throw new VividApiError(`Could not fetch ${m.source}: HTTP ${res.status}`, res.status);
-      bytes = new Uint8Array(await res.arrayBuffer());
-      contentType = res.headers.get('content-type')?.split(';')[0] ?? guessContentType(m.source);
-      filename = basename(new URL(m.source).pathname) || 'media';
-    } else {
-      bytes = new Uint8Array(await readFile(m.source));
-      contentType = guessContentType(m.source);
-      filename = basename(m.source);
-    }
+    const own = /^https?:\/\/.*\/api\/assets\/([a-f0-9]{32})\//i.exec(m.source);
+    if (own) { assetId = own[1]; return importMedia(client, { ...m, source: assetId }); }
+    // URL or local path: the client reads it (local paths only on the stdio server).
+    const { blob, filename, contentType } = await client.loadSource(m.source);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
     const form = new FormData();
-    form.append('file', new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>], { type: contentType }), m.name ?? filename);
+    form.append('file', blob, m.name ?? filename);
     const { data } = await client.post<{ assetId: string }>('/api/ai/save-editor-media', form);
     assetId = data.assetId;
     probed = { bytes, contentType };

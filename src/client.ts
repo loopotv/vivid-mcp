@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
 
 export const DEFAULT_API_URL = 'https://vivid-api.vividoai.workers.dev';
 
@@ -8,6 +6,9 @@ export interface VividClientOptions {
   apiUrl?: string;
   /** Injected for tests. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /** Read a local file by absolute path. Provided by the stdio server (Node);
+   *  absent on the remote server, where only URLs are accepted. */
+  readLocal?: (path: string) => Promise<Uint8Array>;
 }
 
 export class VividApiError extends Error {
@@ -38,12 +39,16 @@ export class VividClient {
   private readonly apiKey: string;
   readonly apiUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly readLocal?: (path: string) => Promise<Uint8Array>;
 
   constructor(opts: VividClientOptions) {
     if (!opts.apiKey) throw new Error('VIVID_API_KEY is required');
     this.apiKey = opts.apiKey;
     this.apiUrl = (opts.apiUrl ?? DEFAULT_API_URL).replace(/\/+$/, '');
-    this.fetchImpl = opts.fetchImpl ?? fetch;
+    // Bound wrapper: on Cloudflare Workers, calling the global fetch with `this`
+    // set to the client throws "Illegal invocation".
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.readLocal = opts.readLocal;
   }
 
   /** Absolute URL for an API path (handy for download links in tool output). */
@@ -126,11 +131,14 @@ export class VividClient {
       if (!res.ok) throw new VividApiError(`Could not fetch ${source}: HTTP ${res.status}`, res.status);
       bytes = new Uint8Array(await res.arrayBuffer());
       contentType = res.headers.get('content-type')?.split(';')[0] ?? guessContentType(source);
-      filename = basename(new URL(source).pathname) || 'upload';
+      filename = basenameOf(new URL(source).pathname) || 'upload';
     } else {
-      bytes = new Uint8Array(await readFile(source));
+      if (!this.readLocal) {
+        throw new VividApiError(`Local file paths are not available on this server (${source}): pass a public http(s) URL instead.`, 400, 'local_path_unsupported');
+      }
+      bytes = await this.readLocal(source);
       contentType = guessContentType(source);
-      filename = basename(source);
+      filename = basenameOf(source);
     }
     // Node's Uint8Array is typed over ArrayBufferLike; Blob wants a plain ArrayBuffer view.
     return { blob: new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>], { type: contentType }), filename, contentType };
@@ -149,6 +157,11 @@ export class VividClient {
     const { data } = await this.post<{ url: string; key: string }>(endpoint, form);
     return data;
   }
+}
+
+/** Last path segment, for file names (pure — no node:path). */
+export function basenameOf(p: string): string {
+  return p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
 }
 
 export function guessContentType(name: string): string {
