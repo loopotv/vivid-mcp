@@ -778,7 +778,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       focus: z.string().max(300).optional().describe('Which object to compare when the candidate shows several, e.g. "the ring on the hand".'),
       language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the summary.'),
     },
-    annotations: { readOnlyHint: true },
+    // Not readOnly: the check costs 1 credit, so it changes the account balance.
+    annotations: { openWorldHint: true },
   }, guarded(async (a) => {
     const [cand, ref] = await Promise.all([imageRef(a.candidate), imageRef(a.reference)]);
     const { data } = await client.post<Record<string, unknown>>('/api/ai/compare-product', {
