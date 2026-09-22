@@ -99,6 +99,32 @@ async function handleMcp(request: Request, env: Env, apiKey: string): Promise<Re
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
+/**
+ * OIDC userinfo. Enterprise workspaces restrict a connector by email domain,
+ * which needs an OIDC identity next to the OAuth grant: this returns the
+ * VIVID account behind the token, with `email_verified` straight from the
+ * account's verification stamp. Same credential as /mcp — the props the
+ * provider hands over — so no extra secret is involved.
+ */
+const userinfoHandler = {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const apiKey = (ctx.props as Props | undefined)?.apiKey;
+    if (!apiKey) return jsonResponse(401, { error: 'invalid_token' }, { 'WWW-Authenticate': 'Bearer error="invalid_token"' });
+    const res = await fetch(`${env.VIVID_API_URL ?? DEFAULT_API_URL}/api/me`, { headers: { 'X-API-Key': apiKey, Accept: 'application/json' } });
+    const body = await res.json().catch(() => null) as { success?: boolean; data?: { id: string; email: string; name?: string; email_verified_at?: string | null } } | null;
+    if (!res.ok || !body?.success || !body.data) {
+      return jsonResponse(401, { error: 'invalid_token' }, { 'WWW-Authenticate': 'Bearer error="invalid_token"' });
+    }
+    const u = body.data;
+    return jsonResponse(200, {
+      sub: u.id,
+      email: u.email,
+      email_verified: Boolean(u.email_verified_at),
+      name: u.name || undefined,
+    });
+  },
+};
+
 // ── /mcp behind the provider: ctx.props holds the credential ────────────────
 const apiHandler = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -125,6 +151,9 @@ const defaultHandler = {
         docs: 'https://vividai.tv/mcp', source: 'https://github.com/loopotv/vivid-mcp',
       });
     }
+
+    if (url.pathname === '/.well-known/openid-configuration') return jsonResponse(200, openidConfiguration(url.origin));
+    if (url.pathname === '/.well-known/jwks.json') return jsonResponse(200, { keys: [] });
 
     if (url.pathname.startsWith('/.well-known/')) {
       const files = JSON.parse(env.WELL_KNOWN_JSON ?? '{}') as Record<string, string>;
@@ -208,13 +237,14 @@ async function finishAuthorize(request: Request, env: Env): Promise<Response> {
 }
 
 const provider = new OAuthProvider<Env>({
-  apiRoute: '/mcp',
-  apiHandler,
+  apiHandlers: { '/mcp': apiHandler, '/userinfo': userinfoHandler },
   defaultHandler,
   authorizeEndpoint: '/authorize',
   tokenEndpoint: '/token',
   clientRegistrationEndpoint: '/register',
-  scopesSupported: ['vivid'],
+  // `openid` and `email` next to our own scope: an Enterprise workspace can
+  // then restrict the connector to its email domain (see /userinfo).
+  scopesSupported: ['openid', 'email', 'profile', 'vivid'],
   accessTokenTTL: 3600,
   refreshTokenTTL: 60 * 60 * 24 * 90,
   // A bearer that is not one of our OAuth tokens but looks like a VIVID key
@@ -234,11 +264,35 @@ const provider = new OAuthProvider<Env>({
 function normalizeDiscovery(request: Request): Request {
   const url = new URL(request.url);
   const m = /^\/mcp\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration)$/.exec(url.pathname)
-    ?? /^\/\.well-known\/(openid-configuration)(?:\/mcp)?$/.exec(url.pathname);
+    ?? /^\/\.well-known\/(openid-configuration)\/mcp$/.exec(url.pathname);
   if (!m) return request;
-  const doc = m[1] === 'oauth-protected-resource' ? '/.well-known/oauth-protected-resource/mcp' : '/.well-known/oauth-authorization-server';
+  const doc = m[1] === 'oauth-protected-resource' ? '/.well-known/oauth-protected-resource/mcp'
+    : m[1] === 'openid-configuration' ? '/.well-known/openid-configuration'
+    : '/.well-known/oauth-authorization-server';
   url.pathname = doc;
   return new Request(url.toString(), request);
+}
+
+/** OIDC discovery: the OAuth endpoints plus the identity bits (userinfo, claims). */
+function openidConfiguration(origin: string) {
+  return {
+    issuer: origin,
+    authorization_endpoint: `${origin}/authorize`,
+    token_endpoint: `${origin}/token`,
+    userinfo_endpoint: `${origin}/userinfo`,
+    registration_endpoint: `${origin}/register`,
+    jwks_uri: `${origin}/.well-known/jwks.json`,
+    scopes_supported: ['openid', 'email', 'profile', 'vivid'],
+    response_types_supported: ['code'],
+    response_modes_supported: ['query'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    subject_types_supported: ['public'],
+    // No ID tokens: identity is read from /userinfo with the access token.
+    id_token_signing_alg_values_supported: [],
+    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+    code_challenge_methods_supported: ['S256'],
+    claims_supported: ['sub', 'email', 'email_verified', 'name'],
+  };
 }
 
 export default {
