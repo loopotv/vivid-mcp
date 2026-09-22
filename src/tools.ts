@@ -200,6 +200,21 @@ async function pollUntilDone(
 export function registerTools(server: McpServer, client: VividClient, io?: LocalIo): void {
   const abs = (p?: string) => (p ? client.url(p) : undefined);
 
+  /**
+   * A download link a human can click. `/api/assets/:id/download` needs the
+   * X-API-Key header, so the bare URL dies with AUTH_REQUIRED when the client
+   * renders it as a link and the user clicks it in a browser. Takes whatever
+   * we have — the path the API returned, an absolute URL, or a bare asset id —
+   * and returns the signed, expiring twin.
+   */
+  const dl = async (pathOrId?: string): Promise<string | undefined> => {
+    if (!pathOrId) return undefined;
+    if (/[?&]sig=/.test(pathOrId)) return abs(pathOrId); // already signed by the API
+    const m = /\/api\/assets\/([^/?#]+)\/download/.exec(pathOrId);
+    const id = m ? m[1]! : (pathOrId.includes('/') ? undefined : pathOrId);
+    return id ? client.downloadLink(id) : abs(pathOrId);
+  };
+
   server.registerTool('vivid_whoami', {
     title: 'Who am I on VIVID',
     description: 'Return the VIVID account linked to the API key: name, email, plan and remaining credits. Call this first to check the connection.',
@@ -302,9 +317,9 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     )));
     return json({
       creditsRemaining: data.creditsRemaining,
-      images: results.map((r, i) => ({
-        jobId: jobIds[i], status: r.status, assetId: r.assetId, downloadUrl: abs(r.downloadUrl), error: r.error,
-      })),
+      images: await Promise.all(results.map(async (r, i) => ({
+        jobId: jobIds[i], status: r.status, assetId: r.assetId, downloadUrl: await dl(r.downloadUrl ?? r.assetId), error: r.error,
+      }))),
     });
   }));
 
@@ -348,7 +363,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       async () => (await client.get<JobStatus>(`/api/ai/video-status/${data.jobId}`)).data,
       a.timeoutSec * 1000, 10000,
     );
-    return json({ ...base, status: final.status, assetId: final.assetId, downloadUrl: abs(final.downloadUrl), error: final.error });
+    return json({ ...base, status: final.status, assetId: final.assetId, downloadUrl: await dl(final.downloadUrl ?? final.assetId), error: final.error });
   }));
 
   server.registerTool('vivid_job_status', {
@@ -370,7 +385,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     const assetId = live?.assetId ?? (output.assetId as string | undefined) ?? job.assets?.[0]?.id;
     return json({
       jobId: job.id, type: job.type, status, creditsUsed: job.credits_used, createdAt: job.created_at,
-      assetId, downloadUrl: assetId ? client.url(`/api/assets/${assetId}/download`) : undefined,
+      assetId, downloadUrl: await dl(assetId),
       error: live?.error ?? (output.error as string | undefined),
       assets: job.assets?.map((x) => ({ id: x.id, type: x.type, filename: x.filename })),
     });
@@ -422,12 +437,13 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       type: a.type, category: a.category, favorite: a.favorite ? 'true' : undefined, project_id: a.projectId,
       page: a.page, limit: a.limit,
     });
+    const links = await client.downloadLinks(data.map((x) => x.id));
     return json({
       pagination,
       assets: data.map((x) => ({
         id: x.id, type: x.type, category: x.category, filename: x.filename, createdAt: x.created_at,
         favorite: !!x.is_favorite, public: !!x.is_public,
-        downloadUrl: client.url(`/api/assets/${x.id}/download`),
+        downloadUrl: links.get(x.id),
         publicUrl: x.is_public && x.share_token ? client.url(`/api/public/assets/${x.share_token}`) : undefined,
         thumbUrl: x.thumbUrl,
       })),
@@ -443,7 +459,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     const { data } = await client.get<Asset>(`/api/assets/${assetId}`);
     return json({
       ...data, favorite: !!data.is_favorite, public: !!data.is_public,
-      downloadUrl: client.url(`/api/assets/${data.id}/download`),
+      downloadUrl: await dl(data.id),
       publicUrl: data.is_public && data.share_token ? client.url(`/api/public/assets/${data.share_token}`) : undefined,
     });
   }));
@@ -520,12 +536,14 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
   }, guarded(async (a) => {
     const { data } = await client.get<MentionItem[]>('/api/assets/mentionable', { project_id: a.projectId });
     const q = a.query?.trim().toLowerCase();
-    const items = data
+    const matches = data
       .filter((m) => a.type === 'all' || m.type === a.type)
-      .filter((m) => !q || m.label.toLowerCase().includes(q))
+      .filter((m) => !q || m.label.toLowerCase().includes(q));
+    const links = await client.downloadLinks(matches.map((m) => m.assetId));
+    const items = matches
       .map((m) => ({
         type: m.type, name: m.label, assetId: m.assetId, isPublic: m.isPublic || undefined,
-        downloadUrl: client.url(`/api/assets/${m.assetId}/download`),
+        downloadUrl: links.get(m.assetId),
         ...(m.metadata && Object.keys(m.metadata).length ? { metadata: m.metadata } : {}),
       }));
     return json({ count: items.length, products: items.filter((i) => i.type === 'product'), testimonials: items.filter((i) => i.type === 'testimonial') });
@@ -563,7 +581,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       jobId: started.jobId, status: last.status, error: last.error ?? undefined,
       name: an.title, productAssetId: last.generatedAssetId ?? undefined, originalAssetId: last.originalAssetId ?? undefined,
       analysis: last.analysis ? { category: an.category, description: an.description, colors: an.colors, material: an.material, finish: an.finish, style: an.style, keywords: an.keywords } : undefined,
-      downloadUrl: last.generatedAssetId ? client.url(`/api/assets/${last.generatedAssetId}/download`) : undefined,
+      downloadUrl: await dl(last.generatedAssetId ?? undefined),
       hint: last.status === 'completed' && an.title ? `Use products: ["${an.title}"] in vivid_generate_image.` : undefined,
     });
   }));
@@ -612,7 +630,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       jobId, status: last.status, error: last.error,
       name: last.personId, testimonialAssetId: last.compositeAssetId,
       description: last.description,
-      downloadUrl: last.compositeAssetId ? client.url(`/api/assets/${last.compositeAssetId}/download`) : undefined,
+      downloadUrl: await dl(last.compositeAssetId ?? undefined),
       hint: last.status === 'completed' && last.personId ? `Use testimonials: ["${last.personId}"] in vivid_generate_image.` : undefined,
     });
   }));
@@ -789,7 +807,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       path = io.join(a.outputDir, `${(a.filename ?? 'retouch').replace(/\.[a-z0-9]+$/i, '')}_${data.assetId.slice(0, 8)}.png`);
       await io.writeFile(path, bytes);
     }
-    return json({ ...data, downloadUrl: abs(data.downloadUrl), path });
+    return json({ ...data, downloadUrl: await dl(data.downloadUrl ?? data.assetId), path });
   }));
 
   server.registerTool('vivid_compare_product', {
@@ -978,7 +996,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       if (last.status === 'completed' || last.status === 'failed' || last.status === 'cancelled') break;
     }
     return json({ renderJobId: last.id, status: last.status, progress: last.progress, outputAssetId: last.outputAssetId,
-      downloadUrl: abs(last.downloadUrl), error: last.error, openUrl: last.openUrl, opened });
+      downloadUrl: await dl(last.downloadUrl ?? last.outputAssetId ?? undefined), error: last.error, openUrl: last.openUrl, opened });
   }));
 
   server.registerTool('vivid_render_status', {
@@ -989,6 +1007,6 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
   }, guarded(async ({ renderJobId }) => {
     const { data: j } = await client.get<RenderJob>(`/api/render-jobs/${renderJobId}`);
     return json({ renderJobId: j.id, status: j.status, progress: j.progress, executor: j.executor, projectAssetId: j.projectAssetId,
-      outputAssetId: j.outputAssetId, downloadUrl: abs(j.downloadUrl), error: j.error, openUrl: j.openUrl, createdAt: j.createdAt });
+      outputAssetId: j.outputAssetId, downloadUrl: await dl(j.downloadUrl ?? j.outputAssetId ?? undefined), error: j.error, openUrl: j.openUrl, createdAt: j.createdAt });
   }));
 }

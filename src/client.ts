@@ -40,6 +40,8 @@ export class VividClient {
   readonly apiUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly readLocal?: (path: string) => Promise<Uint8Array>;
+  /** assetId → signed download URL. Tokens live 7 days; a process never does. */
+  private readonly linkCache = new Map<string, string>();
 
   constructor(opts: VividClientOptions) {
     if (!opts.apiKey) throw new Error('VIVID_API_KEY is required');
@@ -111,6 +113,31 @@ export class VividClient {
       throw new VividApiError(msg, res.status, code);
     }
     return text;
+  }
+
+  /**
+   * Browser-clickable download links for assets the account owns.
+   *
+   * `/api/assets/:id/download` authenticates with the X-API-Key header, so the
+   * bare URL printed in a chat answers AUTH_REQUIRED the moment a human clicks
+   * it (reported from the ChatGPT connector, 22/09/2026). The API mints
+   * HMAC-signed, expiring URLs instead; on an older deployment without that
+   * endpoint we fall back to the plain URL rather than lose the link.
+   */
+  async downloadLinks(assetIds: string[]): Promise<Map<string, string>> {
+    const missing = [...new Set(assetIds)].filter((id) => id && !this.linkCache.has(id));
+    if (missing.length) {
+      try {
+        const { data } = await this.post<{ links: Record<string, string> }>('/api/assets/links', { assetIds: missing });
+        for (const [id, url] of Object.entries(data.links ?? {})) this.linkCache.set(id, url);
+      } catch { /* older API, or asset not owned — fall back below */ }
+    }
+    return new Map(assetIds.map((id) => [id, this.linkCache.get(id) ?? this.url(`/api/assets/${id}/download`)]));
+  }
+
+  /** Single-asset shorthand for {@link downloadLinks}. */
+  async downloadLink(assetId: string): Promise<string> {
+    return (await this.downloadLinks([assetId])).get(assetId)!;
   }
 
   /** Raw binary GET (asset download). Returns bytes + content type. */

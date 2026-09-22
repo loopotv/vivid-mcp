@@ -175,6 +175,20 @@ describe('vivid-mcp tools', () => {
     expect(out).toMatchObject({ jobId: 'v1', type: 'video_ugc', status: 'completed', assetId: 'as1', downloadUrl: 'https://api.test/api/assets/as1/download', creditsUsed: 55 });
   });
 
+  it('vivid_job_status hands out the signed download link when the API mints one', async () => {
+    // A bare /api/assets/:id/download needs the X-API-Key header, so a link
+    // clicked in ChatGPT / Claude answers AUTH_REQUIRED. The client asks the
+    // API for the signed twin instead.
+    routes.set('GET /api/jobs/v2', () => ({ body: { success: true, data: { id: 'v2', type: 'image_gen', status: 'completed', credits_used: 9, created_at: 'now', output: '{"assetId":"as9"}' } } }));
+    routes.set('POST /api/assets/links', (init) => {
+      expect(JSON.parse(init.body as string)).toEqual({ assetIds: ['as9'] });
+      return { body: { success: true, data: { links: { as9: 'https://api.test/api/assets/as9/download?exp=1&sig=deadbeef' } } } };
+    });
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_job_status', arguments: { jobId: 'v2' } })));
+    expect(out.downloadUrl).toBe('https://api.test/api/assets/as9/download?exp=1&sig=deadbeef');
+  });
+
   it('vivid_share_asset builds the public URL from share_token', async () => {
     routes.set('PATCH /api/assets/a1', (init) => {
       expect(JSON.parse(init.body as string)).toEqual({ is_public: true });
