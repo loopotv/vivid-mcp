@@ -25,6 +25,8 @@ id = "cdc221650c70475b849a24d4dc329b78"
 [vars]
 VIVID_API_URL = "https://vivid-api.vividoai.workers.dev"
 CONSENT_URL = "https://vividai.tv/oauth/consent"
+# Domain verification & friends: {"/.well-known/<path>": "<body>"}
+WELL_KNOWN_JSON = "{}"
 
 [observability]
 enabled = true

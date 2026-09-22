@@ -41,6 +41,14 @@ interface Env {
   CONSENT_URL?: string;
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
+  /**
+   * Static files to serve under /.well-known/, as JSON: {"<path>": "<body>"}.
+   * Used for domain verification (OpenAI's directory submission hands out a
+   * path and a token to publish on the MCP hostname). Kept as a var so adding
+   * one is a config change, not a code change. The OAuth documents are served
+   * by the provider and always win.
+   */
+  WELL_KNOWN_JSON?: string;
 }
 
 /** What the OAuth grant carries to /mcp (encrypted at rest by the provider). */
@@ -116,6 +124,14 @@ const defaultHandler = {
         ],
         docs: 'https://vividai.tv/mcp', source: 'https://github.com/loopotv/vivid-mcp',
       });
+    }
+
+    if (url.pathname.startsWith('/.well-known/')) {
+      const files = JSON.parse(env.WELL_KNOWN_JSON ?? '{}') as Record<string, string>;
+      const body = files[url.pathname];
+      if (body !== undefined) {
+        return new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS } });
+      }
     }
 
     if (url.pathname === '/authorize') return startAuthorize(request, env);
