@@ -372,7 +372,11 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     inputSchema: {
       jobId: z.string(),
     },
-    annotations: { readOnlyHint: true },
+    // NOT readOnly: on a processing video job this polls the provider, and the
+    // server then records the finished result (status + asset). Nothing new is
+    // created or removed — the generation was already paid for and produced —
+    // so it is non-destructive and idempotent.
+    annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, guarded(async ({ jobId }) => {
     const { data: job } = await client.get<Job>(`/api/jobs/${jobId}`);
     let live: JobStatus | undefined;
