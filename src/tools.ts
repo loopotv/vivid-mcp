@@ -250,6 +250,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       maxTokens: z.number().int().min(64).max(16000).default(2000),
       reasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional().describe('Grok / GPT only.'),
     },
+    // spends credits, creates nothing
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const { data } = await client.post<ChatResult>('/api/ai/chat', { model: a.model, messages: a.messages, maxTokens: a.maxTokens, reasoningEffort: a.reasoningEffort });
     return json(data);
@@ -275,6 +277,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       wait: z.boolean().default(true).describe('Wait for the generation to finish (polls up to timeoutSec).'),
       timeoutSec: z.number().int().min(10).max(600).default(180),
     },
+    // spends credits, adds new assets
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const [objectImageIds, modelImageIds] = await Promise.all([
       resolveReferences(client, 'product', a.products, a.projectId),
@@ -323,6 +327,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       wait: z.boolean().default(false).describe('Block until the video is ready (polls up to timeoutSec). Prefer false + vivid_job_status for long clips.'),
       timeoutSec: z.number().int().min(30).max(900).default(420),
     },
+    // spends credits, adds a new asset
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const { data } = await client.post<VideoGenResult>('/api/ai/generate-video', {
       prompt: a.prompt, model: a.model, requestedModel: a.model, duration: a.duration, aspectRatio: a.aspectRatio,
@@ -451,6 +457,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       outputDir: z.string().describe('Absolute directory path where the file will be written (created if missing).'),
       filename: z.string().optional().describe('Override the file name (extension added from the content type if missing).'),
     },
+    // writes to the local filesystem and can overwrite a file
+    annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, guarded(async ({ assetId, outputDir, filename }) => {
     const { data: meta } = await client.get<Asset>(`/api/assets/${assetId}`);
     const { bytes, contentType } = await client.download(`/api/assets/${assetId}/download`);
@@ -471,6 +479,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       public: z.boolean().optional().describe('true = publish and return the public URL, false = unpublish.'),
       favorite: z.boolean().optional(),
     },
+    // publishes a link anyone can open, or revokes it — reversible
+    annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, guarded(async ({ assetId, public: isPublic, favorite }) => {
     if (isPublic === undefined && favorite === undefined) return fail('Pass `public` and/or `favorite`.');
     const { data } = await client.patch<Asset>(`/api/assets/${assetId}`, {
@@ -489,6 +499,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     inputSchema: {
       source: z.string().describe('Absolute local file path or http(s) URL.'),
     },
+    // adds a temporary file (expires after 7 days)
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async ({ source }) => {
     const data = await client.tempUpload(source);
     return json(data);
@@ -529,6 +541,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       wait: z.boolean().default(true),
       timeoutSec: z.number().int().min(10).max(600).default(240),
     },
+    // free, but saves a new product on the account
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const form = new FormData();
     if (/^https?:\/\//i.test(a.image)) form.append('imageUrl', a.image);
@@ -565,6 +579,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       wait: z.boolean().default(true),
       timeoutSec: z.number().int().min(30).max(900).default(300),
     },
+    // spends credits, saves a new testimonial
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     let jobId: string;
     if (a.photos) {
@@ -628,6 +644,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       outputDir: z.string().optional().describe('Download the MP3 into this local directory.'),
       filename: z.string().optional(),
     },
+    // spends credits, adds a new asset
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     let referenceAudioUrl: string | undefined;
     if (a.provider === 'omnivoice-clone') {
@@ -671,6 +689,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       outputDir: z.string().optional().describe('Download the file into this local directory.'),
       filename: z.string().optional(),
     },
+    // spends credits, adds a new asset
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const { data } = await client.post<{ url: string; durationSeconds: number; requestedSeconds: number; provider: string; credits: number; exactDuration: boolean }>('/api/ai/generate-music', {
       prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: 'mp3',
@@ -708,6 +728,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       granularity: z.enum(['cue', 'word']).default('cue').describe('srt/vtt only: one block per readable cue, or one per word (karaoke / alignment checks).'),
       outputPath: z.string().optional().describe('srt/vtt only: write the subtitle file here.'),
     },
+    // free; may upload the file and write a local subtitle file
+    annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, guarded(async (a) => {
     const body: Record<string, unknown> = { locale: a.language, format: a.format, granularity: a.granularity };
     if (/^[a-f0-9]{32}$/i.test(a.source)) body.assetId = a.source;
@@ -749,6 +771,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       filename: z.string().optional(),
       outputDir: z.string().optional().describe('Also download the result into this local directory.'),
     },
+    // spends credits, adds a new asset (the original is untouched)
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     if (!a.target && !a.region && !a.mask) throw new VividApiError('one of target, region or mask is required', 400);
     const src = await imageRef(a.source);
@@ -779,7 +803,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the summary.'),
     },
     // Not readOnly: the check costs 1 credit, so it changes the account balance.
-    annotations: { openWorldHint: true },
+    annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, guarded(async (a) => {
     const [cand, ref] = await Promise.all([imageRef(a.candidate), imageRef(a.reference)]);
     const { data } = await client.post<Record<string, unknown>>('/api/ai/compare-product', {
@@ -884,6 +908,8 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       media: z.array(mediaSchema).optional().describe('Media to import into the project library.'),
       commands: commandsSchema.optional().describe('Initial commands, e.g. ADD_CLIP for each media item.'),
     },
+    // creates a new project
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const file = newProject(a.name, a.canvasPreset);
     const editor = openHeadlessProject(file, { resolveUrl: resolveAssetUrl(client) });
@@ -906,6 +932,8 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       media: z.array(mediaSchema).optional().describe('Media to import into the library before applying the commands.'),
       dryRun: z.boolean().default(false).describe('Apply and report, but do not save.'),
     },
+    // edits the project in place — commands can remove clips
+    annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const { editor } = await loadProject(client, a.projectAssetId);
     const imported = await addMedia(editor, a.media);
@@ -932,6 +960,8 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       wait: z.boolean().default(false).describe('Wait for completion (polls up to timeoutSec).'),
       timeoutSec: z.number().int().min(30).max(1800).default(600),
     },
+    // queues a render, adds a new asset
+    annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const { data: job } = await client.post<RenderJob>('/api/render-jobs', { projectAssetId: a.projectAssetId, name: a.name });
     const opened = a.openBrowser && io ? io.openInBrowser(job.openUrl) : false;
