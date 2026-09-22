@@ -73,6 +73,9 @@ function randomId(bytes = 24): string {
 
 /** One MCP round-trip with the given credential. */
 async function handleMcp(request: Request, env: Env, apiKey: string): Promise<Response> {
+  // Stateless: there is no server-initiated stream to subscribe to. Answer
+  // 405 instead of holding an SSE connection open that will never emit.
+  if (request.method === 'GET') return jsonResponse(405, { error: 'method not allowed', hint: 'POST JSON-RPC to /mcp' }, { Allow: 'POST, OPTIONS' });
   const client = new VividClient({ apiKey, apiUrl: env.VIVID_API_URL ?? DEFAULT_API_URL });
   const server = new McpServer({ name: 'vivid-mcp', version: VERSION }, { instructions: INSTRUCTIONS });
   registerTools(server, client); // no LocalIo: remote mode
