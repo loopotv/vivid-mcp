@@ -147,3 +147,10 @@ npm run inspect   # opens the MCP Inspector against the built server
 ## License
 
 MIT
+
+## Skills
+
+`skills/` holds the skill bundles submitted with the ChatGPT app (one folder, one `SKILL.md` each,
+[per OpenAI's format](https://learn.chatgpt.com/docs/build-skills)): `vivid-product-photos`,
+`vivid-product-video`, `vivid-brand-cast`. They are plain instructions on top of the tools above —
+no code — so any MCP client can read them as a playbook.
