@@ -19,7 +19,7 @@
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
     "prepare": "npm run build",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json",
     "test": "vitest run",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "deploy:remote": "wrangler deploy",
@@ -41,12 +41,14 @@
   },
   "homepage": "https://vividai.tv",
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.10.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "vivid-editor-core": "^0.3.0",
     "zod": "^4.5.4",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260922.1",
     "@types/node": "^26.4.1",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",

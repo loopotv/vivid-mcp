@@ -1,8 +1,16 @@
 # Remote vivid-mcp: the same tools as `npx -y vivid-mcp`, served over
 # Streamable HTTP from a Cloudflare Worker — nothing to install, no Node on
-# the user's machine. Auth: `Authorization: Bearer vk_…` (or X-API-Key) with
-# the user's VIVID API key on every request; stateless, one MCP server per
-# request. Deploy: `npm run deploy:remote` (Cloudflare account of vividai.tv).
+# the user's machine.
+#
+# Auth, two ways:
+#   • `Authorization: Bearer vk_…` (or X-API-Key) with the user's VIVID API key
+#     on every request — Claude Code, Cursor, curl, agents.
+#   • OAuth 2.1 (dynamic client registration + PKCE) for ChatGPT / Claude.ai
+#     connectors: this Worker is the authorization server, consent happens on
+#     vividai.tv/oauth/consent, tokens/grants live in OAUTH_KV. See src/worker.ts.
+#
+# Stateless MCP: one McpServer per request. Deploy: `npm run deploy:remote`
+# (Cloudflare account of vividai.tv).
 name = "vivid-mcp-remote"
 main = "src/worker.ts"
 compatibility_date = "2026-09-15"
@@ -10,8 +18,13 @@ compatibility_flags = ["nodejs_compat"]
 
 routes = [{ pattern = "mcp.vividai.tv", custom_domain = true }]
 
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "cdc221650c70475b849a24d4dc329b78"
+
 [vars]
 VIVID_API_URL = "https://vivid-api.vividoai.workers.dev"
+CONSENT_URL = "https://vividai.tv/oauth/consent"
 
 [observability]
 enabled = true
