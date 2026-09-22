@@ -91,7 +91,7 @@ export function registerLocalTools(server: McpServer, client: VividClient): void
       name: z.string().optional().describe('Asset file name (without extension).'),
     },
     // drives a local browser and writes a video file; may overwrite outputPath
-    annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     const result = await recordUi(client, { ...a, steps: a.steps as RecordStep[] });
     return json(result);
