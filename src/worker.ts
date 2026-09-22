@@ -207,8 +207,24 @@ const provider = new OAuthProvider<Env>({
   },
 });
 
+/**
+ * ChatGPT probes discovery under the MCP path too (`/mcp/.well-known/…`, and
+ * OpenID's `openid-configuration`) before the RFC 9728 form. Fold those onto
+ * the documents the provider serves so the probe succeeds on the first try.
+ */
+function normalizeDiscovery(request: Request): Request {
+  const url = new URL(request.url);
+  const m = /^\/mcp\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration)$/.exec(url.pathname)
+    ?? /^\/\.well-known\/(openid-configuration)(?:\/mcp)?$/.exec(url.pathname);
+  if (!m) return request;
+  const doc = m[1] === 'oauth-protected-resource' ? '/.well-known/oauth-protected-resource/mcp' : '/.well-known/oauth-authorization-server';
+  url.pathname = doc;
+  return new Request(url.toString(), request);
+}
+
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(rawRequest: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const request = normalizeDiscovery(rawRequest);
     const url = new URL(request.url);
     // `X-API-Key` (no Authorization header) bypasses the provider: it is the
     // documented header-based path and needs no OAuth machinery.
