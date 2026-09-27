@@ -1,3 +1,4 @@
+import { analysisSecondsFor } from './editor.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -451,5 +452,21 @@ describe('audio analysis (server-side beats + peaks)', () => {
     expect(cut.audioAnalysis[0].error).toMatch(/Unsupported audio format/);
     expect(cut.errors[0]).toMatch(/no beat analysis/);
     expect(cut.saved).toBe(false);
+  });
+});
+
+describe('analysisSecondsFor', () => {
+  const clip = (assetId: string, sourceOffsetMs: number, durationMs: number, playbackRate?: number) =>
+    ({ assetId, sourceOffsetMs, durationMs, playbackRate }) as never;
+
+  it('keeps the server default while the used part fits in 90 s', () => {
+    expect(analysisSecondsFor({ timelineClips: [clip('m', 0, 24_000)] }, 'm')).toBeUndefined();
+    expect(analysisSecondsFor({ timelineClips: [] }, 'm')).toBeUndefined();
+  });
+
+  it('asks for the part the timeline plays, speed included, capped at 180 s', () => {
+    expect(analysisSecondsFor({ timelineClips: [clip('m', 80_000, 20_000), clip('x', 0, 500_000)] }, 'm')).toBe(105);
+    expect(analysisSecondsFor({ timelineClips: [clip('m', 60_000, 20_000, 2)] }, 'm')).toBe(105);
+    expect(analysisSecondsFor({ timelineClips: [clip('m', 0, 400_000)] }, 'm')).toBe(180);
   });
 });

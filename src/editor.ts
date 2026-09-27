@@ -9,7 +9,7 @@
  */
 
 import {
-  CANVAS_PRESETS, emptyProjectFile, openHeadlessProject,
+  CANVAS_PRESETS, clipSourceElapsedMs, emptyProjectFile, openHeadlessProject,
   type AiCommand, type AssetClip, type EditorState, type HeadlessEditor, type ProjectFile,
 } from 'vivid-editor-core';
 import type { BeatAnalysis } from 'vivid-editor-core';
@@ -187,12 +187,34 @@ const ASSET_ID_RE = /^[a-f0-9]{32}$/i;
  * so CUT_TO_BEAT (grid 'beats' | 'peaks') works headless exactly as in the
  * browser. Failures are reported per asset, never thrown.
  */
+/** What the server analyses when the request names no length (services/audio-analysis.ts). */
+const SERVER_DEFAULT_ANALYSIS_S = 90;
+const SERVER_MAX_ANALYSIS_S = 180;
+
+/**
+ * Seconds of `assetId` the timeline actually plays (furthest source point of
+ * its clips, speed included), or undefined when that fits in the server's
+ * default window. Then the default request is kept, so the KV cache entry is
+ * shared with the browser and earlier calls.
+ */
+export function analysisSecondsFor(state: Pick<EditorState, 'timelineClips'>, assetId: string): number | undefined {
+  let endMs = 0;
+  for (const c of state.timelineClips) {
+    if (c.assetId !== assetId) continue;
+    endMs = Math.max(endMs, c.sourceOffsetMs + clipSourceElapsedMs(c, c.durationMs));
+  }
+  const seconds = Math.ceil(endMs / 1000) + 5; // margin: beats just past the last cut
+  return endMs / 1000 > SERVER_DEFAULT_ANALYSIS_S ? Math.min(SERVER_MAX_ANALYSIS_S, seconds) : undefined;
+}
+
 export async function ensureBeatAnalysis(client: VividClient, editor: HeadlessEditor, opts: { force?: boolean } = {}): Promise<AudioAnalysisSummary[]> {
   const out: AudioAnalysisSummary[] = [];
   for (const a of editor.store.getState().assetLibrary) {
     if (a.mediaType !== 'audio') continue;
     const existing = editor.store.getState().audioBeatsByAssetId[a.id];
-    if (!opts.force && existing && typeof existing === 'object' && existing.peaks) {
+    const maxSeconds = analysisSecondsFor(editor.store.getState(), a.id);
+    const coversUsedPart = !maxSeconds || (typeof existing === 'object' && (existing.analyzedDurationMs ?? 0) >= (maxSeconds - 5) * 1000);
+    if (!opts.force && existing && typeof existing === 'object' && existing.peaks && coversUsedPart) {
       out.push({ assetId: a.id, serverAssetId: a.serverAssetId, bpm: existing.bpm, firstBeatMs: existing.firstBeatMs, beats: existing.beats.length, peaks: existing.peaks.length });
       continue;
     }
@@ -200,7 +222,7 @@ export async function ensureBeatAnalysis(client: VividClient, editor: HeadlessEd
     if (!serverAssetId) { out.push({ assetId: a.id, error: 'not a VIVID asset — import it with media[] first' }); continue; }
     try {
       editor.store.getState().setAudioBeatsStatus(a.id, 'analyzing');
-      const { data } = await client.post<AudioAnalysisData>('/api/ai/audio-analysis', { assetId: serverAssetId, mode: 'both', name: a.name });
+      const { data } = await client.post<AudioAnalysisData>('/api/ai/audio-analysis', { assetId: serverAssetId, mode: 'both', name: a.name, ...(maxSeconds ? { maxSeconds } : {}) });
       const analysis: BeatAnalysis = {
         bpm: data.bpm ?? 0, firstBeatMs: data.firstBeatMs ?? 0, beats: data.beats ?? [], downbeats: data.downbeats ?? [],
         source: 'server', analyzedDurationMs: data.analyzedDurationMs, peaks: data.peaks ?? [], bpmConfidence: data.bpmConfidence,
