@@ -42,6 +42,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 |---|---|---|---|
 | **Remote** | `https://mcp.vividai.tv/mcp` + `Authorization: Bearer vk_…` | no | no |
 | **Connector (ChatGPT, Claude.ai)** | `https://mcp.vividai.tv/mcp` with OAuth — no key to paste | no | no |
+| **Claude Code plugin** | `/plugin install vivid@vivid` — OAuth, plus the VIVID skills | no | no |
 | **Claude Desktop extension** | download [`vivid-mcp.mcpb`](https://vividai.tv/downloads/vivid-mcp.mcpb), double-click, paste the key | no (bundled runtime) | yes |
 | **Local (npx)** | `npx -y vivid-mcp` with `VIVID_API_KEY` | Node.js 20+ | yes |
 
@@ -64,6 +65,17 @@ claude mcp add --transport http vivid https://mcp.vividai.tv/mcp --header "Autho
 ### Connectors: ChatGPT, Claude.ai (OAuth)
 
 Clients that cannot send a header authenticate with OAuth 2.1 instead. Add a connector with the URL `https://mcp.vividai.tv/mcp` and pick **OAuth** (ChatGPT → Settings → Connectors → Create; Claude.ai → Settings → Connectors → Add custom connector). The client discovers `/.well-known/oauth-protected-resource`, registers itself (dynamic client registration) and sends you to `vividai.tv/oauth/consent`, where you sign in and click **Authorize**. Each connector gets its own credential (`vc_…`, never your API key) that acts on your assets and credits but cannot change the password, rotate the API key or delete the account; revoke it any time from **Settings → Connected apps**.
+
+### Claude Code plugin (OAuth + skills)
+
+This repo is also a Claude Code plugin and its own marketplace. It connects to the remote server with OAuth (no key to paste) and adds the skills in [`skills/`](skills) (product photos, product video, brand cast):
+
+```
+/plugin marketplace add loopotv/vivid-mcp
+/plugin install vivid@vivid
+```
+
+Then run `/mcp`, pick **vivid** and authenticate: the browser opens `vividai.tv/oauth/consent`. The manifest lives in [`.claude-plugin/`](.claude-plugin); its `version` must match `package.json` (a test checks it), because installed plugins only update when it changes. Check it with `claude plugin validate --strict .`.
 
 ### Claude Desktop (one-click extension)
 

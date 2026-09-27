@@ -1,0 +1,17 @@
+{
+  "name": "vivid",
+  "owner": {
+    "name": "VIVID",
+    "url": "https://vividai.tv"
+  },
+  "description": "VIVID plugins for Claude Code",
+  "plugins": [
+    {
+      "name": "vivid",
+      "source": "./",
+      "description": "Product photos, videos, music, voices and timelines from VIVID (vividai.tv), connected via OAuth.",
+      "category": "design",
+      "tags": ["e-commerce", "images", "video", "music"]
+    }
+  ]
+}
