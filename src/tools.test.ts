@@ -176,6 +176,23 @@ describe('vivid-mcp tools', () => {
     expect(out).toMatchObject({ jobId: 'v1', type: 'video_ugc', status: 'completed', assetId: 'as1', downloadUrl: 'https://api.test/api/assets/as1/download', creditsUsed: 55 });
   });
 
+  it('vivid_job_status names the video the poll just finished, from the job read again', async () => {
+    // What the API really answers: the status carries no assetId, and the
+    // first job read is from before the poll completed it.
+    let reads = 0;
+    routes.set('GET /api/jobs/v3', () => {
+      reads++;
+      return reads === 1
+        ? { body: { success: true, data: { id: 'v3', type: 'video_ugc', status: 'processing', credits_used: 70, created_at: 'now', output: '{"taskId":"t3","endpoint":"wavespeed"}', assets: [] } } }
+        : { body: { success: true, data: { id: 'v3', type: 'video_ugc', status: 'completed', credits_used: 70, created_at: 'now', output: '{"assetId":"as3","downloadUrl":"/api/assets/as3/download"}', assets: [{ id: 'as3', type: 'video', filename: 'v.mp4' }] } } };
+    });
+    routes.set('GET /api/ai/video-status/v3', () => ({ body: { success: true, data: { jobId: 'v3', status: 'completed', downloadUrl: '/api/assets/as3/download' } } }));
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_job_status', arguments: { jobId: 'v3' } })));
+    expect(reads).toBe(2);
+    expect(out).toMatchObject({ status: 'completed', assetId: 'as3', assets: [{ id: 'as3', type: 'video' }] });
+  });
+
   it('vivid_job_status hands out the signed download link when the API mints one', async () => {
     // A bare /api/assets/:id/download needs the X-API-Key header, so a link
     // clicked in ChatGPT / Claude answers AUTH_REQUIRED. The client asks the

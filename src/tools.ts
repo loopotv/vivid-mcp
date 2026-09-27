@@ -378,11 +378,16 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     // so it is non-destructive and idempotent.
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, guarded(async ({ jobId }) => {
-    const { data: job } = await client.get<Job>(`/api/jobs/${jobId}`);
+    let { data: job } = await client.get<Job>(`/api/jobs/${jobId}`);
     let live: JobStatus | undefined;
     if (job.status === 'processing' || job.status === 'pending') {
       const path = job.type === 'video_ugc' ? `/api/ai/video-status/${jobId}` : `/api/ai/image-status/${jobId}`;
       try { live = (await client.get<JobStatus>(path)).data; } catch { /* fall back to the stored job */ }
+      // The poll may have just finished the job: the job read above predates
+      // its asset (and older APIs send no assetId in the status), so read it again.
+      if (live && live.status !== job.status && !live.assetId) {
+        try { job = (await client.get<Job>(`/api/jobs/${jobId}`)).data; } catch { /* keep the first read */ }
+      }
     }
     const output = parseJson(job.output) ?? {};
     const status = live?.status ?? job.status;
