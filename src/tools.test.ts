@@ -53,7 +53,7 @@ describe('vivid-mcp tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
-      'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_music_status', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -250,12 +250,29 @@ describe('vivid-mcp tools', () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'gemini', credits: 1, url: expect.stringContaining('.mp3') });
   });
 
-  it('vivid_generate_music posts prompt, duration and provider and returns the temp url', async () => {
-    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, requestedSeconds: 88, provider: 'minimax-music-3.0', credits: 14, exactDuration: false } } }));
+  it('vivid_generate_music starts an async task and returns the track once the status is completed', async () => {
+    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { taskId: 'task123', status: 'processing', provider: 'minimax-music-3.0', credits: 14, requestedSeconds: 88 } } }));
+    routes.set('GET /api/ai/music-status/task123', () => ({ body: { success: true, data: { taskId: 'task123', status: 'completed', url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, requestedSeconds: 88, provider: 'minimax-music-3.0', credits: 14 } } }));
     const client = await connect();
     const r = await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'warm lo-fi, 85 BPM', durationSec: 88 } });
-    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'minimax-music-3.0', instrumental: true, format: 'mp3' });
-    expect(JSON.parse(textOf(r))).toMatchObject({ url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, provider: 'minimax-music-3.0', credits: 14 });
+    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'minimax-music-3.0', instrumental: true, format: 'mp3', async: true });
+    expect(JSON.parse(textOf(r))).toMatchObject({ status: 'completed', url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, credits: 14 });
+  });
+
+  it('vivid_generate_music hands back a taskId when the track is not ready within waitSec; vivid_music_status picks it up', async () => {
+    let ready = false;
+    routes.set('POST /api/ai/generate-music', () => ({ body: { success: true, data: { taskId: 'task456', status: 'processing', provider: 'minimax-music-3.0', credits: 14, requestedSeconds: 30 } } }));
+    routes.set('GET /api/ai/music-status/task456', () => ({ body: { success: true, data: ready
+      ? { taskId: 'task456', status: 'completed', url: 'https://api.test/api/temp/tmp/music/u.mp3', durationSeconds: 121, provider: 'minimax-music-3.0', credits: 14, requestedSeconds: 30 }
+      : { taskId: 'task456', status: 'processing', provider: 'minimax-music-3.0', credits: 14, requestedSeconds: 30 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'cinematic strings', durationSec: 30, waitSec: 0 } });
+    const first = JSON.parse(textOf(r));
+    expect(first).toMatchObject({ status: 'processing', taskId: 'task456' });
+    expect(first.next).toContain('vivid_music_status');
+    ready = true;
+    const r2 = await client.callTool({ name: 'vivid_music_status', arguments: { taskId: 'task456', waitSec: 0 } });
+    expect(JSON.parse(textOf(r2))).toMatchObject({ status: 'completed', url: 'https://api.test/api/temp/tmp/music/u.mp3' });
   });
 
   it('vivid_transcribe sends an asset id as assetId and returns words + cues', async () => {

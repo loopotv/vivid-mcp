@@ -704,34 +704,68 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   // ── Music ────────────────────────────────────────────────────────────────
 
+  type MusicTask = {
+    taskId: string; status: 'processing' | 'completed' | 'failed'; provider: string; credits: number;
+    requestedSeconds: number; url?: string; durationSeconds?: number; error?: string; elapsedSeconds?: number;
+  };
+  // Poll the async music task, then (local server only) download the file.
+  const finishMusic = async (taskId: string, timeoutSec: number, outputDir?: string, filename?: string) => {
+    const deadline = Date.now() + timeoutSec * 1000;
+    let t = (await client.get<MusicTask>(`/api/ai/music-status/${taskId}`)).data;
+    while (t.status === 'processing' && Date.now() < deadline) {
+      await sleep(5000);
+      t = (await client.get<MusicTask>(`/api/ai/music-status/${taskId}`)).data;
+    }
+    if (t.status === 'processing') {
+      return json({ ...t, next: `Still rendering (songs take 1–3 minutes). Call vivid_music_status with taskId "${taskId}" in a minute — credits are charged only when the track is ready.` });
+    }
+    let path: string | undefined;
+    if (t.status === 'completed' && t.url && outputDir && io) {
+      const { bytes } = await client.download(t.url);
+      await io.mkdir(outputDir);
+      const ext = t.url.endsWith('.wav') ? 'wav' : 'mp3';
+      path = io.join(outputDir, filename ?? `music_${Date.now()}.${ext}`);
+      await io.writeFile(path, bytes);
+    }
+    return json({ ...t, path });
+  };
+
   server.registerTool('vivid_generate_music', {
     title: 'Generate music (MiniMax Music 3.0)',
-    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-3.0" (default, 14 credits) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (88 s asked → 97–146 s delivered), so trim in the editor. Takes 1–3 minutes; the call blocks until the track is ready. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack; set outputDir to also download it.',
+    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-3.0" (default, 14 credits, charged only when the track is ready) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (30 s asked → ~2 min delivered), so trim in the editor. Rendering takes 1–3 minutes: the tool waits up to `waitSec`, then returns `status: "processing"` with a `taskId` — call vivid_music_status with it to get the track. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack; set outputDir to also download it.',
     inputSchema: {
       prompt: z.string().min(3).max(1500).describe('Style brief in English: genre, mood, instruments, tempo, what it accompanies.'),
       durationSec: z.number().int().min(5).max(300).default(60),
       provider: z.enum(['minimax-music-3.0']).default('minimax-music-3.0'),
       instrumental: z.boolean().default(true).describe('false = with vocals (MiniMax only; give lyrics or let it write them).'),
       lyrics: z.string().max(3000).optional().describe('MiniMax with vocals: the lyrics, optionally with [Verse]/[Chorus]/[Bridge] tags.'),
+      waitSec: z.number().int().min(0).max(240).default(io ? 240 : 40).describe('How long to wait for the track before returning a taskId to poll. Hosted connectors time out after about a minute, so keep it short there.'),
       outputDir: z.string().optional().describe('Download the file into this local directory.'),
       filename: z.string().optional(),
     },
     // spends credits, adds a new asset
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
-    const { data } = await client.post<{ url: string; durationSeconds: number; requestedSeconds: number; provider: string; credits: number; exactDuration: boolean }>('/api/ai/generate-music', {
-      prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: 'mp3',
+    const { data } = await client.post<{ taskId?: string; url?: string }>('/api/ai/generate-music', {
+      prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: 'mp3', async: true,
     });
-    let path: string | undefined;
-    if (a.outputDir && io) {
-      const { bytes } = await client.download(data.url);
-      await io.mkdir(a.outputDir);
-      const ext = data.url.endsWith('.wav') ? 'wav' : 'mp3';
-      path = io.join(a.outputDir, a.filename ?? `music_${Date.now()}.${ext}`);
-      await io.writeFile(path, bytes);
-    }
-    return json({ ...data, path });
+    // An API older than async music ignores the flag and answers with the track.
+    if (!data.taskId) return json({ status: 'completed', ...data });
+    return finishMusic(data.taskId, a.waitSec, a.outputDir, a.filename);
   }));
+
+  server.registerTool('vivid_music_status', {
+    title: 'Music task status',
+    description: 'Get the track of a vivid_generate_music call that returned status "processing". Waits up to `waitSec`; returns the public URL when ready (status "completed"), or "processing" again. Credits are charged once, when the track is ready; failed tracks are free.',
+    inputSchema: {
+      taskId: z.string().min(6),
+      waitSec: z.number().int().min(0).max(240).default(io ? 240 : 40),
+      outputDir: z.string().optional().describe('Download the file into this local directory.'),
+      filename: z.string().optional(),
+    },
+    // polls; on completion the server stores the file and charges the reserved price once
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, guarded(async (a) => finishMusic(a.taskId, a.waitSec, a.outputDir, a.filename)));
 
   server.registerTool('vivid_list_music_providers', {
     title: 'List music providers',
