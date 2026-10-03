@@ -168,6 +168,13 @@ describe('vivid-mcp tools', () => {
     expect(out).toMatchObject({ jobId: 'v1', taskId: 't1', status: 'processing', creditsRemaining: 200, warning: 'frames folded' });
   });
 
+  it('vivid_generate_video forwards reference videos as videoReferences', async () => {
+    routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v2', taskId: 't2', creditsRemaining: 100 } } }));
+    const client = await connect();
+    await client.callTool({ name: 'vivid_generate_video', arguments: { prompt: 'same camera move on my bottle', model: 'seedance-2.5', duration: 5, referenceVideoUrls: ['https://cdn/move.mp4'] } });
+    expect(calls[0].body).toMatchObject({ model: 'seedance-2.5', videoReferences: [{ url: 'https://cdn/move.mp4' }] });
+  });
+
   it('vivid_job_status refreshes a processing video job through the provider poll', async () => {
     routes.set('GET /api/jobs/v1', () => ({ body: { success: true, data: { id: 'v1', type: 'video_ugc', status: 'processing', credits_used: 55, created_at: 'now', output: '{"taskId":"t1"}' } } }));
     routes.set('GET /api/ai/video-status/v1', () => ({ body: { success: true, data: { jobId: 'v1', status: 'completed', assetId: 'as1', downloadUrl: '/api/assets/as1/download' } } }));

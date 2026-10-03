@@ -159,6 +159,15 @@ function summariseModel(m: AiModel) {
     if (caps.flatCredits) summary.creditsPerVideo = caps.flatCredits;
     if (caps.creditTable) summary.creditsByResolutionAndDuration = caps.creditTable;
     if (caps.videoInputCredits) summary.creditsWithSourceVideo = caps.videoInputCredits;
+    // Seedance 2.x: with reference videos the rate drops but the uploaded
+    // seconds are billed too — (input + output) × rate.
+    if (caps.videoRefPricing) summary.creditsPerSecondWithReferenceVideo = { rates: caps.videoRefPricing, billedOn: 'reference video seconds + output seconds' };
+    if (caps.supportsVideoReference) {
+      summary.referenceVideos = Object.fromEntries(Object.entries({
+        max: caps.videoReferenceCount, minSecondsEach: caps.videoReferenceMinS, maxSecondsEach: caps.videoReferenceMaxS,
+        maxSecondsTotal: caps.videoReferenceMaxTotalS, minPixels: caps.videoReferenceMinPixels, maxPixels: caps.videoReferenceMaxPixels,
+      }).filter(([, v]) => v != null));
+    }
     summary.durations = caps.durations;
     summary.resolutions = caps.resolutions;
     summary.aspectRatios = caps.aspectRatios;
@@ -325,7 +334,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_generate_video', {
     title: 'Generate video',
-    description: 'Start a video generation on VIVID. Pick a model with vivid_list_models (type=video) and respect its durations / resolutions / aspect ratios. Reference images, start/end frames and audio must be public URLs (use vivid_upload_file for local files). Credits are pre-charged (credits/second × duration). Videos take 1-5 minutes: by default this returns the jobId immediately — poll with vivid_job_status. Note: a model\'s start/end frame and reference images can be mutually exclusive (e.g. Seedance 2.5): the backend resolves it and returns a warning.',
+    description: 'Start a video generation on VIVID. Pick a model with vivid_list_models (type=video) and respect its durations / resolutions / aspect ratios. Reference images, start/end frames and audio must be public URLs (use vivid_upload_file for local files). Credits are pre-charged (credits/second × duration). Videos take 1-5 minutes: by default this returns the jobId immediately — poll with vivid_job_status. Note: a model\'s start/end frame and reference images can be mutually exclusive (e.g. Seedance 2.5): the backend resolves it and returns a warning. Reference videos (referenceVideoUrls) work on models whose vivid_list_models entry has `referenceVideos`: Seedance 2.0/2.5 bill the uploaded seconds too, Gemini Omni takes one source clip.',
     inputSchema: {
       prompt: z.string().min(3).describe('Shot description. Describe subject, action, camera, lighting; keep camera and subject movement in separate sentences.'),
       model: z.string().describe('Video model slug, e.g. "seedance-2.5", "kling-o3", "minimax-h3".'),
@@ -337,6 +346,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       endFrameUrl: z.string().url().optional().describe('Last frame (needs startFrameUrl on most models).'),
       referenceImageUrls: z.array(z.string().url()).optional().describe('Subject / product reference images (models with "reference" support).'),
       audioFileUrls: z.array(z.string().url()).optional().describe('Audio files: voice for talking-head models, or reference audio where supported.'),
+      referenceVideoUrls: z.array(z.string().url()).max(3).optional().describe('Reference videos (MP4/MOV) to copy motion, rhythm or framing from. Seedance 2.0: max 3, 15 s in all. Seedance 2.5: max 3, 2–30 s each, 30 s in all, 480p or 720p only (never with start/end frame). Gemini Omni: 1 clip, first 10 s. Billed seconds: see vivid_list_models.'),
       mode: z.string().optional().describe('Model mode when applicable (e.g. "std" | "pro" for Kling O3).'),
       projectId: z.string().optional(),
       wait: z.boolean().default(false).describe('Block until the video is ready (polls up to timeoutSec). Prefer false + vivid_job_status for long clips.'),
@@ -350,6 +360,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       resolution: a.resolution, generateAudio: a.generateAudio, mode: a.mode,
       startFrameUrl: a.startFrameUrl, endFrameUrl: a.endFrameUrl,
       referenceImageUrls: a.referenceImageUrls, audioFileUrls: a.audioFileUrls,
+      ...(a.referenceVideoUrls?.length ? { videoReferences: a.referenceVideoUrls.map((url) => ({ url })) } : {}),
       projectId: a.projectId, source: 'mcp',
     });
     if (data.requiresConfirmation) {
