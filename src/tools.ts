@@ -286,11 +286,11 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     description: 'Generate one or more images on VIVID from a text prompt. Feature saved products and testimonials by NAME with `products` / `testimonials` (same as the app\'s #Product / @Testimonial mentions — list them with vivid_list_references), or pass ad-hoc reference image URLs (public URLs, e.g. from vivid_upload_file). Credits are charged per image according to the model. By default waits for completion and returns the asset ids and download URLs.',
     inputSchema: {
       prompt: z.string().min(3).describe('What to generate. English works best.'),
-      model: z.string().describe('Model slug from vivid_list_models (type=image), e.g. "nano-banana-2".'),
+      model: z.string().describe('Model slug from vivid_list_models (type=image), e.g. "nano-banana-2". For images that must carry legible text (claims, labels, posters, banners) prefer "ideogram-4.5".'),
       aspectRatio: z.enum(['1:1', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '3:2', '2:3']).default('1:1'),
       numImages: z.number().int().min(1).max(4).default(1),
       resolution: z.string().optional().describe('Model-specific, e.g. "1K" | "2K" | "4K" when supported.'),
-      quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Quality tier for models that price by quality (GPT Image 2 / 2.5): credits grow with quality × resolution — see creditRates in vivid_list_models (e.g. gpt-image-2.5 1K: low 4, medium 5, high 12, xhigh 19, max 39). Default: medium.'),
+      quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Quality tier for models that price by quality (GPT Image 2 / 2.5, Ideogram 4.5): credits grow with quality × resolution — see creditRates in vivid_list_models (e.g. gpt-image-2.5 1K: low 4, medium 5, high 12, xhigh 19, max 39; ideogram-4.5 1K or 2K: low 6, medium 9, high 25 — xhigh/max not supported). Default: medium (high for jewelry).'),
       style: z.string().optional().describe('Optional style preset slug.'),
       products: z.array(z.string()).optional().describe('Saved products to feature, by name (as in the app\'s "#" picker, e.g. "Borsa Nera") or asset id — see vivid_list_references. The product\'s look and geometry are locked like in the app.'),
       testimonials: z.array(z.string()).optional().describe('Saved testimonials / characters to cast, by name (as in the app\'s "@" picker, e.g. "Lina") or asset id — see vivid_list_references. Identity is locked.'),
