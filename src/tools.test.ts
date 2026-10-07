@@ -53,7 +53,7 @@ describe('vivid-mcp tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
-      'vivid_music_status', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -324,6 +324,55 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_compare_product', arguments: { candidate: 'a'.repeat(32), reference: 'b'.repeat(32), skuDescription: 'silver ring', focus: 'the ring' } });
     expect(calls[0].body).toEqual({ candidateAssetId: 'a'.repeat(32), referenceAssetId: 'b'.repeat(32), skuDescription: 'silver ring', focus: 'the ring', lang: 'it' });
     expect(JSON.parse(textOf(r))).toEqual(data);
+  });
+
+  describe('vivid_product_sheet', () => {
+    const P = 'c'.repeat(32);
+    const ready = {
+      id: 's1', jobId: 'j1', status: 'ready', category: 'ring', attempts: 1, creditsCharged: 13, free: false, error: null, step: null, message: null,
+      gridAssetId: 'g'.repeat(32), qc: [{ panel: 'front', match: 0.91, verdict: 'pass' }], createdAt: 'now', updatedAt: 'now',
+      panels: { front: { assetId: '1'.repeat(32), thumbUrl: '/t' }, view2: { assetId: '2'.repeat(32) }, view3: { assetId: '3'.repeat(32) }, worn: { assetId: '4'.repeat(32) } },
+    };
+    beforeEach(() => {
+      routes.set('GET /api/assets/mentionable', () => ({ body: { success: true, data: [{ id: 'm1', label: 'Anello Rubino', type: 'product', assetId: P }] } }));
+      routes.set('POST /api/assets/links', (init) => {
+        const { assetIds } = JSON.parse(String(init.body)) as { assetIds: string[] };
+        return { body: { success: true, data: { links: Object.fromEntries(assetIds.map((id) => [id, `https://api.test/s/${id}?sig=x`])) } } };
+      });
+    });
+
+    it('reads without charging and says what a new sheet costs', async () => {
+      routes.set(`GET /api/products/${P}/sheet`, () => ({ body: { success: true, data: { sheet: null, offer: { credits: 13, free: false } } } }));
+      const client = await connect();
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_product_sheet', arguments: { product: 'anello rubino' } })));
+      expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/sheet'))).toBe(false);
+      expect(out.sheet).toBeNull();
+      expect(out.next).toContain('13 credits');
+    });
+
+    it('creates by product name and returns signed links for the panels', async () => {
+      routes.set(`POST /api/products/${P}/sheet`, () => ({ status: 202, body: { success: true, data: { sheetId: 's1', jobId: 'j1', credits: 13, free: false } } }));
+      routes.set(`GET /api/products/${P}/sheet`, () => ({ body: { success: true, data: { sheet: ready, offer: { credits: 13, free: false } } } }));
+      const client = await connect();
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_product_sheet', arguments: { product: 'Anello Rubino', create: true, extraPhotos: ['e'.repeat(32)], language: 'en' } })));
+      expect(calls.find((c) => c.method === 'POST' && c.path.endsWith('/sheet'))!.body).toEqual({ locale: 'en', extraAssetIds: ['e'.repeat(32)] });
+      expect(out.started).toEqual({ credits: 13, free: false });
+      expect(out.sheet.panels.front.downloadUrl).toBe(`https://api.test/s/${'1'.repeat(32)}?sig=x`);
+      expect(out.sheet.gridDownloadUrl).toContain('sig=');
+      expect(out.sheet.panels.front.thumbUrl).toBeUndefined();
+      expect(calls.filter((c) => c.path === '/api/assets/links')).toHaveLength(1);
+    });
+
+    it('waits for the running sheet instead of failing on 409', async () => {
+      routes.set(`POST /api/products/${P}/sheet`, () => ({ status: 409, body: { success: false, error: 'busy', code: 'SHEET_IN_PROGRESS' } }));
+      routes.set(`GET /api/products/${P}/sheet`, () => ({ body: { success: true, data: { sheet: { ...ready, status: 'processing', step: 'checking' }, offer: { credits: 13, free: false } } } }));
+      const client = await connect();
+      const r = await client.callTool({ name: 'vivid_product_sheet', arguments: { product: P, create: true, waitSec: 0 } });
+      expect(r.isError).toBeFalsy();
+      const out = JSON.parse(textOf(r));
+      expect(out.started).toBe(false);
+      expect(out.next).toContain('checking');
+    });
   });
 
   describe('timeline tools (vivid-editor-core headless)', () => {

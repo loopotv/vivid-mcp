@@ -885,6 +885,74 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     return json(data);
   }));
 
+  // ── Product reference sheet ──────────────────────────────────────────────
+
+  type SheetPanel = { assetId: string | null; thumbUrl?: string };
+  type SheetState = {
+    sheet: null | {
+      id: string; jobId: string | null; status: 'processing' | 'ready' | 'failed'; category: string | null; attempts: number;
+      creditsCharged: number; free: boolean; error: string | null; step: string | null; message: string | null;
+      gridAssetId: string | null; panels: Record<'front' | 'view2' | 'view3' | 'worn', SheetPanel>;
+      qc: Array<{ panel: string; match: number; verdict: string }> | null; createdAt: string; updatedAt: string;
+    };
+    offer: { credits: number; free: boolean };
+  };
+  // Signed links instead of the app's thumb URLs; the sheet stays as the API returns it otherwise.
+  const sheetOut = async (s: SheetState, extra: Record<string, unknown> = {}) => {
+    if (!s.sheet) return json({ sheet: null, offer: s.offer, ...extra });
+    const { panels, ...rest } = s.sheet;
+    const out: Record<string, unknown> = { ...rest };
+    if (rest.status === 'ready') {
+      const ids = [rest.gridAssetId, ...Object.values(panels).map((p) => p.assetId)].filter((id): id is string => !!id);
+      const links = await client.downloadLinks(ids);
+      out.gridDownloadUrl = rest.gridAssetId ? links.get(rest.gridAssetId) : undefined;
+      out.panels = Object.fromEntries(Object.entries(panels).map(([k, p]) => [k, { assetId: p.assetId, downloadUrl: p.assetId ? links.get(p.assetId) : undefined }]));
+    }
+    return json({ sheet: out, offer: s.offer, ...extra });
+  };
+
+  server.registerTool('vivid_product_sheet', {
+    title: 'Product reference sheet (4 views + QC)',
+    description: 'The reference sheet of a saved product: Nano Banana 2.1 draws a 2×2 grid (front, two category-specific angles, worn/in use) from the product photos, then every panel is checked against the real photo with the same vision QC as vivid_compare_product; one failed check is regenerated for free, a second failure refunds everything. Without `create` it only returns the current sheet and what a new one would cost (free). With `create: true` it starts a sheet — 13 credits, or free for the first sheet of a free account — and waits up to `waitSec` (it takes 1–3 minutes); call again without `create` to poll. Angles the photos do not show are reconstructed: pass an extra photo of the side/back in `extraPhotos` for a faithful sheet. Returns the four panels and the grid with download links, the QC scores, or the failure message.',
+    inputSchema: {
+      product: z.string().min(1).describe('Saved product by name (as in vivid_list_references) or asset id.'),
+      create: z.boolean().default(false).describe('Start a new sheet (spends credits unless free). false = just read the latest one.'),
+      extraPhotos: z.array(z.string()).max(3).optional().describe('create only: more photos of the same product (side, back, detail) as saved products by name or image asset ids of the account.'),
+      language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the failure message.'),
+      waitSec: z.number().int().min(0).max(240).default(io ? 200 : 40).describe('How long to wait for a running sheet. Hosted connectors time out after about a minute, so keep it short there.'),
+      projectId: z.string().optional(),
+    },
+    // create: spends credits and adds assets; read-only otherwise
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, guarded(async (a) => {
+    const productId = ASSET_ID.test(a.product) ? a.product : (await resolveReferences(client, 'product', [a.product], a.projectId))[0]!;
+    const path = `/api/products/${productId}/sheet`;
+    let started: Record<string, unknown> | undefined;
+    if (a.create) {
+      const extras = a.extraPhotos?.length
+        ? await Promise.all(a.extraPhotos.map(async (p) => (ASSET_ID.test(p) ? p : (await resolveReferences(client, 'product', [p], a.projectId))[0]!)))
+        : undefined;
+      try {
+        const { data } = await client.post<{ sheetId: string; jobId: string; credits: number; free: boolean }>(path, { locale: a.language, extraAssetIds: extras });
+        started = { started: { credits: data.credits, free: data.free } };
+      } catch (err) {
+        // One sheet at a time per product: wait for the running one instead of failing.
+        if (!(err instanceof VividApiError && err.code === 'SHEET_IN_PROGRESS')) throw err;
+        started = { started: false, note: 'A sheet for this product was already being made: waiting for that one (nothing charged).' };
+      }
+    }
+    const deadline = Date.now() + a.waitSec * 1000;
+    let s = (await client.get<SheetState>(path)).data;
+    while (s.sheet?.status === 'processing' && Date.now() < deadline) {
+      await sleep(5000);
+      s = (await client.get<SheetState>(path)).data;
+    }
+    const next = s.sheet?.status === 'processing'
+      ? { next: `Still working (step: ${s.sheet.step ?? 'reading'}). Call vivid_product_sheet with the same product and no create in a minute.` }
+      : !s.sheet ? { next: `No sheet yet. create: true starts one (${s.offer.free ? 'free' : `${s.offer.credits} credits`}).` } : {};
+    return sheetOut(s, { productAssetId: productId, ...started, ...next });
+  }));
+
   // ── Video editor: projects + render queue ────────────────────────────────
 
   server.registerTool('vivid_list_editor_projects', {

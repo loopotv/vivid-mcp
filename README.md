@@ -26,6 +26,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_transcribe` | Speech-to-text (Deepgram Nova-3, free): per-word timestamps, readable cues, SRT/VTT export — from an asset, URL or local file |
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
 | `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |
+| `vivid_product_sheet` | Reference sheet of a saved product: front, two angles and worn, each checked against the real photo (one free redo, refund if it still fails) — 13 credits, first one free on the free plan; without `create` just reads it |
 | `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, cloned voices, emotions), OmniVoice voice design, Deepgram |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
