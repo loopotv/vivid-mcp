@@ -149,6 +149,20 @@ describe('vivid-mcp tools', () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ status: 'completed', name: 'Borsa Nera', productAssetId: 'e1', analysis: { category: 'bag' }, hint: 'Use products: ["Borsa Nera"] in vivid_generate_image.' });
   }, 20000);
 
+  it('vivid_analyze_product accepts a gallery assetId (remote connector has no local files)', async () => {
+    routes.set('POST /api/ai/analyze-image', (init) => {
+      const fd = init.body as FormData;
+      expect(fd.get('assetId')).toBe('a'.repeat(32));
+      expect(fd.get('imageUrl')).toBeNull();
+      return { status: 202, body: { success: true, data: { jobId: 'an2', status: 'processing' } } };
+    });
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_analyze_product', arguments: { assetId: 'a'.repeat(32), wait: false } });
+    expect(JSON.parse(textOf(r))).toMatchObject({ jobId: 'an2' });
+    const bad = await client.callTool({ name: 'vivid_analyze_product', arguments: {} });
+    expect(bad.isError).toBe(true);
+  });
+
   it('vivid_create_testimonial from attributes posts JSON and returns the assigned name', async () => {
     routes.set('POST /api/ai/create-testimonial-scratch', () => ({ status: 202, body: { success: true, data: { jobId: 't1', status: 'processing' } } }));
     routes.set('GET /api/ai/testimonial-status/t1', () => ({ body: { success: true, data: { status: 'completed', personId: 'Lina', compositeAssetId: 'c1', description: { gender: 'Female' } } } }));

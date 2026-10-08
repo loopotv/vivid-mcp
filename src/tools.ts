@@ -573,7 +573,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     title: 'Analyze a product photo (save as product)',
     description: 'Run VIVID\'s "Analizza prodotto" on a product photo: vision analysis (name, category, colors, material, finish, style, keywords) + a clean e-commerce render, saved to the account as a PRODUCT you can then feature by name in vivid_generate_image `products` (see vivid_list_references). Free — counts toward the plan\'s monthly analysis quota (50/month on Free). Takes 30–90 s; waits by default. For jewelry the geometry lock may ask the app to confirm the category; the name comes from the analysis (rename in the app if needed).',
     inputSchema: {
-      image: z.string().min(1).describe('Product photo: absolute local path (preferred — uploaded as multipart) or public URL (JPEG/PNG/WebP, max 30 MB; some CDNs such as Pexels refuse server-side downloads → use a local path).'),
+      image: z.string().min(1).optional().describe('Product photo: absolute local path (preferred — uploaded as multipart) or URL (JPEG/PNG/WebP, max 15 MB; some CDNs such as Pexels refuse server-side downloads → use a local path). URLs from vivid_upload_file work too.'),
+      assetId: z.string().optional().describe('Analyze a photo already in the VIVID gallery (asset id from vivid_list_assets) instead of `image` — the way to go on the remote connector, which cannot read local files.'),
       description: z.string().max(1000).optional().describe('What the product is, to help the analysis (e.g. "silver bracelet with blue pearls").'),
       locale: z.enum(['it', 'en', 'es']).default('it').describe('Language of the generated name/description.'),
       wait: z.boolean().default(true),
@@ -582,8 +583,10 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     // free, but saves a new product on the account
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
+    if (!a.image && !a.assetId) throw new Error('Pass `image` (local path or URL) or `assetId`.');
     const form = new FormData();
-    if (/^https?:\/\//i.test(a.image)) form.append('imageUrl', a.image);
+    if (!a.image) form.append('assetId', a.assetId!);
+    else if (/^https?:\/\//i.test(a.image)) form.append('imageUrl', a.image);
     else { const f = await client.loadSource(a.image); form.append('image', f.blob, f.filename); }
     if (a.description) form.append('description', a.description);
     form.append('locale', a.locale);
