@@ -154,8 +154,12 @@ export class VividClient {
     let contentType: string;
     let filename: string;
     if (/^https?:\/\//i.test(source)) {
-      const res = await this.fetchImpl(source);
-      if (!res.ok) throw new VividApiError(`Could not fetch ${source}: HTTP ${res.status}`, res.status);
+      // Many hosts (Wikimedia, several CDNs and shops) answer 403 to requests
+      // without a User-Agent — the default from a Worker (audit 08/10/2026).
+      const res = await this.fetchImpl(source, { headers: { 'User-Agent': SOURCE_USER_AGENT, Accept: '*/*' } });
+      // Plain Error, not VividApiError: the refusal comes from that site, not
+      // from VIVID, and the message must not say "VIVID API error".
+      if (!res.ok) throw new Error(`Could not download ${source}: that site answered HTTP ${res.status}${res.status === 403 || res.status === 401 ? ' (it blocks server-side downloads — try another URL of the file)' : ''}.`);
       bytes = new Uint8Array(await res.arrayBuffer());
       contentType = res.headers.get('content-type')?.split(';')[0] ?? guessContentType(source);
       filename = basenameOf(new URL(source).pathname) || 'upload';
@@ -185,6 +189,8 @@ export class VividClient {
     return data;
   }
 }
+
+export const SOURCE_USER_AGENT = 'Mozilla/5.0 (compatible; VIVID/1.0; +https://vividai.tv)';
 
 /** Last path segment, for file names (pure — no node:path). */
 export function basenameOf(p: string): string {

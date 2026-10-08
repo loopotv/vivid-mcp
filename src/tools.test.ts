@@ -39,6 +39,17 @@ async function connect() {
   return client;
 }
 
+/** The hosted connector: no filesystem, no local tools (src/worker.ts). */
+async function connectRemote() {
+  const server = new McpServer({ name: 'test-remote', version: '0.0.0' });
+  registerTools(server, new VividClient({ apiKey: 'vivid_test', apiUrl: 'https://api.test', fetchImpl: fetchMock }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  await client.connect(clientTransport);
+  return client;
+}
+
 const textOf = (r: Awaited<ReturnType<Client['callTool']>>) => {
   const c = (r.content as Array<{ type: string; text?: string }>)[0];
   return c.text ?? '';
@@ -572,5 +583,62 @@ describe('analysisSecondsFor', () => {
     expect(analysisSecondsFor({ timelineClips: [clip('m', 80_000, 20_000), clip('x', 0, 500_000)] }, 'm')).toBe(105);
     expect(analysisSecondsFor({ timelineClips: [clip('m', 60_000, 20_000, 2)] }, 'm')).toBe(105);
     expect(analysisSecondsFor({ timelineClips: [clip('m', 0, 400_000)] }, 'm')).toBe(180);
+  });
+
+  describe('hosted connector (audit 08/10/2026)', () => {
+    it('hides filesystem params, waits ~40 s by default and never mentions local paths', async () => {
+      const client = await connectRemote();
+      const { tools } = await client.listTools();
+      const byName = new Map(tools.map((t) => [t.name, t]));
+      const props = (n: string) => (byName.get(n)!.inputSchema as { properties: Record<string, { default?: unknown; description?: string }> }).properties;
+      expect(props('vivid_transcribe').outputPath).toBeUndefined();
+      expect(props('vivid_retouch').outputDir).toBeUndefined();
+      expect(props('vivid_retouch').jobId).toBeDefined();
+      expect(props('vivid_generate_image').timeoutSec.default).toBe(40);
+      expect(props('vivid_analyze_product').timeoutSec.default).toBe(40);
+      expect(props('vivid_create_testimonial').timeoutSec.default).toBe(40);
+      expect(JSON.stringify(tools)).not.toMatch(/local (file|path)|outputDir|absolute path/i);
+      // The local server keeps them.
+      const local = await connect();
+      const localProps = ((await local.listTools()).tools.find((t) => t.name === 'vivid_transcribe')!.inputSchema as { properties: Record<string, unknown> }).properties;
+      expect(localProps.outputPath).toBeDefined();
+    });
+
+    it('vivid_retouch runs async on the queue and returns the finished asset', async () => {
+      routes.set('POST /api/ai/retouch', () => ({ status: 202, body: { success: true, data: { jobId: 'r1', status: 'processing' } } }));
+      routes.set('GET /api/ai/image-status/r1', () => ({ body: { success: true, data: { jobId: 'r1', status: 'completed', assetId: 'f'.repeat(32) } } }));
+      routes.set('POST /api/assets/links', () => ({ body: { success: true, data: { links: { ['f'.repeat(32)]: 'https://api.test/signed' } } } }));
+      const client = await connectRemote();
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_retouch', arguments: { source: 'a'.repeat(32), prompt: 'make it gold', target: 'the ring' } })));
+      expect(calls.find((c) => c.path === '/api/ai/retouch')!.body).toMatchObject({ async: true, sourceAssetId: 'a'.repeat(32) });
+      expect(out).toMatchObject({ jobId: 'r1', status: 'completed', downloadUrl: 'https://api.test/signed' });
+      expect(out.hint).toBeUndefined();
+    });
+
+    it('vivid_analyze_product resumes a running analysis by jobId without starting a new one', async () => {
+      routes.set('GET /api/ai/analyze-status/an9', () => ({ body: { success: true, data: { status: 'completed', analysis: { title: 'Anello' }, generatedAssetId: 'e9' } } }));
+      const client = await connectRemote();
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_analyze_product', arguments: { jobId: 'an9', timeoutSec: 10 } })));
+      expect(calls.some((c) => c.path === '/api/ai/analyze-image')).toBe(false);
+      expect(out).toMatchObject({ jobId: 'an9', status: 'completed', name: 'Anello' });
+    }, 15000);
+
+    it('downloads foreign URLs with a User-Agent and blames the site, not VIVID, on 403', async () => {
+      routes.set('GET /blocked.jpg', () => ({ status: 403, body: 'no' }));
+      const client = await connectRemote();
+      const r = await client.callTool({ name: 'vivid_upload_file', arguments: { source: 'https://cdn.test/blocked.jpg' } });
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toMatch(/that site answered HTTP 403/);
+      expect(textOf(r)).not.toMatch(/VIVID API error/);
+      expect(calls.find((c) => c.path === '/blocked.jpg')!.headers['User-Agent']).toMatch(/VIVID/);
+    });
+
+    it('vivid_list_assets returns absolute thumb URLs', async () => {
+      routes.set('GET /api/assets', () => ({ body: { success: true, data: [{ id: 'x1', type: 'image', thumbUrl: '/api/assets/x1/thumb?exp=1&sig=2' }], pagination: {} } }));
+      routes.set('POST /api/assets/links', () => ({ body: { success: true, data: { links: {} } } }));
+      const client = await connectRemote();
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_list_assets', arguments: {} })));
+      expect(out.assets[0].thumbUrl).toBe('https://api.test/api/assets/x1/thumb?exp=1&sig=2');
+    });
   });
 });

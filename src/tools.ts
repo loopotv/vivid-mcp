@@ -208,6 +208,14 @@ async function pollUntilDone(
 
 export function registerTools(server: McpServer, client: VividClient, io?: LocalIo): void {
   const abs = (p?: string) => (p ? client.url(p) : undefined);
+  /** Text for the local server vs the hosted connector (no filesystem there). */
+  const L = (local: string, remote: string) => (io ? local : remote);
+  /** Schema fields that only make sense with a filesystem (outputDir / outputPath). */
+  const localOnly = <T extends object>(shape: T): T => (io ? shape : ({} as T));
+  const remoteOnly = <T extends object>(shape: T): T => (io ? ({} as T) : shape);
+  /** Hosted connectors (Claude.ai, ChatGPT) cut a tool call after about a
+   *  minute: there the long-running tools wait ~40 s, then hand back an id. */
+  const WAIT = (localSec: number) => (io ? localSec : 40);
 
   /**
    * A download link a human can click. `/api/assets/:id/download` needs the
@@ -299,7 +307,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       contextImageUrls: z.array(z.string().url()).optional().describe('Scene / context reference image URLs.'),
       projectId: z.string().optional().describe('Attach the generation to a VIVID project.'),
       wait: z.boolean().default(true).describe('Wait for the generation to finish (polls up to timeoutSec).'),
-      timeoutSec: z.number().int().min(10).max(600).default(180),
+      timeoutSec: z.number().int().min(10).max(600).default(WAIT(180)).describe(L('Seconds to wait before returning the job ids still running.', 'Seconds to wait before returning the job ids still running — hosted connectors time out after about a minute, keep it short. Never re-generate a job that is still processing: poll it with vivid_job_status.')),
     },
     // spends credits, adds new assets
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -324,17 +332,19 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       async () => (await client.get<JobStatus>(`/api/ai/image-status/${jobId}`)).data,
       a.timeoutSec * 1000, 3000,
     )));
+    const pending = results.some((r) => r.status !== 'completed' && r.status !== 'failed' && r.status !== 'cancelled');
     return json({
       creditsRemaining: data.creditsRemaining,
       images: await Promise.all(results.map(async (r, i) => ({
         jobId: jobIds[i], status: r.status, assetId: r.assetId, downloadUrl: await dl(r.downloadUrl ?? r.assetId), error: r.error,
       }))),
+      hint: pending ? 'Still generating (already paid): call vivid_job_status with each processing jobId — do NOT generate again.' : undefined,
     });
   }));
 
   server.registerTool('vivid_generate_video', {
     title: 'Generate video',
-    description: 'Start a video generation on VIVID. Pick a model with vivid_list_models (type=video) and respect its durations / resolutions / aspect ratios. Reference images, start/end frames and audio must be public URLs (use vivid_upload_file for local files). Credits are pre-charged (credits/second × duration). Videos take 1-5 minutes: by default this returns the jobId immediately — poll with vivid_job_status. Note: a model\'s start/end frame and reference images can be mutually exclusive (e.g. Seedance 2.5): the backend resolves it and returns a warning. Reference videos (referenceVideoUrls) work on models whose vivid_list_models entry has `referenceVideos`: Seedance 2.0/2.5 bill the uploaded seconds too, Gemini Omni takes one source clip.',
+    description: 'Start a video generation on VIVID. Pick a model with vivid_list_models (type=video) and respect its durations / resolutions / aspect ratios. Reference images, start/end frames and audio must be public URLs' + L(' (use vivid_upload_file for local files)', '') + '. Credits are pre-charged (credits/second × duration). Videos take 1-5 minutes: by default this returns the jobId immediately — poll with vivid_job_status. Note: a model\'s start/end frame and reference images can be mutually exclusive (e.g. Seedance 2.5): the backend resolves it and returns a warning. Reference videos (referenceVideoUrls) work on models whose vivid_list_models entry has `referenceVideos`: Seedance 2.0/2.5 bill the uploaded seconds too, Gemini Omni takes one source clip.',
     inputSchema: {
       prompt: z.string().min(3).describe('Shot description. Describe subject, action, camera, lighting; keep camera and subject movement in separate sentences.'),
       model: z.string().describe('Video model slug, e.g. "seedance-2.5", "kling-o3", "minimax-h3".'),
@@ -465,7 +475,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
         favorite: !!x.is_favorite, public: !!x.is_public,
         downloadUrl: links.get(x.id),
         publicUrl: x.is_public && x.share_token ? client.url(`/api/public/assets/${x.share_token}`) : undefined,
-        thumbUrl: x.thumbUrl,
+        thumbUrl: abs(x.thumbUrl),
       })),
     });
   }));
@@ -531,9 +541,9 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_upload_file', {
     title: 'Upload file for generation',
-    description: 'Upload a local file (absolute path) or a remote URL — image, video or audio — to VIVID\'s temporary storage and get a public URL to use as startFrameUrl, referenceImageUrls, objectImageUrls or audioFileUrls. Temporary files expire after 7 days; generated results are stored permanently in the gallery.',
+    description: L('Upload a local file (absolute path) or a remote URL', 'Copy a remote URL') + ' — image, video or audio — to VIVID\'s temporary storage and get a public URL to use as startFrameUrl, referenceImageUrls, objectImageUrls or audioFileUrls. Temporary files expire after 7 days; generated results are stored permanently in the gallery.',
     inputSchema: {
-      source: z.string().describe('Absolute local file path or http(s) URL.'),
+      source: z.string().describe(L('Absolute local file path or http(s) URL.', 'http(s) URL of the file.')),
     },
     // adds a temporary file (expires after 7 days)
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -573,25 +583,34 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     title: 'Analyze a product photo (save as product)',
     description: 'Run VIVID\'s "Analizza prodotto" on a product photo: vision analysis (name, category, colors, material, finish, style, keywords) + a clean e-commerce render, saved to the account as a PRODUCT you can then feature by name in vivid_generate_image `products` (see vivid_list_references). Free — counts toward the plan\'s monthly analysis quota (50/month on Free). Takes 30–90 s; waits by default. For jewelry the geometry lock may ask the app to confirm the category; the name comes from the analysis (rename in the app if needed).',
     inputSchema: {
-      image: z.string().min(1).optional().describe('Product photo: absolute local path (preferred — uploaded as multipart) or URL (JPEG/PNG/WebP, max 15 MB; some CDNs such as Pexels refuse server-side downloads → use a local path). URLs from vivid_upload_file work too.'),
-      assetId: z.string().optional().describe('Analyze a photo already in the VIVID gallery (asset id from vivid_list_assets) instead of `image` — the way to go on the remote connector, which cannot read local files.'),
+      image: z.string().min(1).optional().describe(L(
+        'Product photo: absolute local path (preferred — uploaded as multipart) or URL (JPEG/PNG/WebP, max 15 MB; some CDNs such as Pexels refuse server-side downloads → use a local path). URLs from vivid_upload_file work too.',
+        'Product photo URL (JPEG/PNG/WebP, max 15 MB) — a public URL or one returned by vivid_upload_file.')),
+      assetId: z.string().optional().describe('Analyze a photo already in the VIVID gallery (asset id from vivid_list_assets) instead of `image`.'),
+      jobId: z.string().optional().describe('Resume waiting on an analysis that returned status "processing" (no new analysis, no quota).'),
       description: z.string().max(1000).optional().describe('What the product is, to help the analysis (e.g. "silver bracelet with blue pearls").'),
       locale: z.enum(['it', 'en', 'es']).default('it').describe('Language of the generated name/description.'),
       wait: z.boolean().default(true),
-      timeoutSec: z.number().int().min(10).max(600).default(240),
+      timeoutSec: z.number().int().min(10).max(600).default(WAIT(240)),
     },
     // free, but saves a new product on the account
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
-    if (!a.image && !a.assetId) throw new Error('Pass `image` (local path or URL) or `assetId`.');
-    const form = new FormData();
-    if (!a.image) form.append('assetId', a.assetId!);
-    else if (/^https?:\/\//i.test(a.image)) form.append('imageUrl', a.image);
-    else { const f = await client.loadSource(a.image); form.append('image', f.blob, f.filename); }
-    if (a.description) form.append('description', a.description);
-    form.append('locale', a.locale);
-    const { data: started } = await client.post<{ jobId: string; status: string }>('/api/ai/analyze-image', form);
-    if (!a.wait) return json({ jobId: started.jobId, status: started.status, hint: 'Poll GET /api/ai/analyze-status/:jobId (vivid_job_status shows the job too).' });
+    let started: { jobId: string; status: string };
+    if (a.jobId) {
+      started = { jobId: a.jobId, status: 'processing' };
+    } else {
+      if (!a.image && !a.assetId) throw new Error(L('Pass `image` (local path or URL) or `assetId`.', 'Pass `image` (URL) or `assetId`.'));
+      const form = new FormData();
+      if (!a.image) form.append('assetId', a.assetId!);
+      else if (/^https?:\/\//i.test(a.image)) form.append('imageUrl', a.image);
+      else { const f = await client.loadSource(a.image); form.append('image', f.blob, f.filename); }
+      if (a.description) form.append('description', a.description);
+      form.append('locale', a.locale);
+      started = (await client.post<{ jobId: string; status: string }>('/api/ai/analyze-image', form)).data;
+    }
+    const resume = `Still analyzing: call vivid_analyze_product with jobId "${started.jobId}" to keep waiting — do NOT start a new analysis.`;
+    if (!a.wait) return json({ jobId: started.jobId, status: started.status, hint: resume });
     const deadline = Date.now() + a.timeoutSec * 1000;
     let last: AnalyzeStatus = { status: 'processing' };
     while (Date.now() < deadline) {
@@ -605,7 +624,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       name: an.title, productAssetId: last.generatedAssetId ?? undefined, originalAssetId: last.originalAssetId ?? undefined,
       analysis: last.analysis ? { category: an.category, description: an.description, colors: an.colors, material: an.material, finish: an.finish, style: an.style, keywords: an.keywords } : undefined,
       downloadUrl: await dl(last.generatedAssetId ?? undefined),
-      hint: last.status === 'completed' && an.title ? `Use products: ["${an.title}"] in vivid_generate_image.` : undefined,
+      hint: last.status === 'completed' && an.title ? `Use products: ["${an.title}"] in vivid_generate_image.`
+        : last.status === 'failed' ? undefined : resume,
     });
   }));
 
@@ -613,18 +633,21 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     title: 'Create a testimonial (AI model / persona)',
     description: 'Create a reusable TESTIMONIAL on the account — a consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked). Two ways: `photos` = three photos of a REAL person (left profile, front, right profile) → composite identity (you must have that person\'s consent; it is recorded); or `attributes` = design the person from scratch (gender, age, ethnicity required; optional bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
     inputSchema: {
-      photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe('Local paths or URLs of the three views of a real person.'),
+      photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe(L('Local paths or URLs of the three views of a real person.', 'URLs of the three views of a real person.')),
       attributes: z.record(z.string(), z.string()).optional().describe('From-scratch persona attributes (gender, age, ethnicity + optional look fields).'),
       locale: z.enum(['it', 'en', 'es']).default('it'),
       projectId: z.string().optional(),
       wait: z.boolean().default(true),
-      timeoutSec: z.number().int().min(30).max(900).default(300),
+      timeoutSec: z.number().int().min(30).max(900).default(WAIT(300)),
+      jobId: z.string().optional().describe('Resume waiting on a testimonial that returned status "processing" (no new charge).'),
     },
     // spends credits, saves a new testimonial
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
     let jobId: string;
-    if (a.photos) {
+    if (a.jobId) {
+      jobId = a.jobId;
+    } else if (a.photos) {
       const form = new FormData();
       for (const view of ['left', 'front', 'right'] as const) {
         const f = await client.loadSource(a.photos[view]);
@@ -641,7 +664,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     } else {
       throw new VividApiError('Pass either photos {left, front, right} or attributes {gender, age, ethnicity, …}', 400);
     }
-    if (!a.wait) return json({ jobId, status: 'processing', hint: 'Poll GET /api/ai/testimonial-status/:jobId.' });
+    const resume = `Still creating (already paid): call vivid_create_testimonial with jobId "${jobId}" to keep waiting — do NOT create it again.`;
+    if (!a.wait) return json({ jobId, status: 'processing', hint: resume });
     const deadline = Date.now() + a.timeoutSec * 1000;
     let last: TestimonialStatus = { status: 'processing' };
     while (Date.now() < deadline) {
@@ -654,7 +678,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       name: last.personId, testimonialAssetId: last.compositeAssetId,
       description: last.description,
       downloadUrl: await dl(last.compositeAssetId ?? undefined),
-      hint: last.status === 'completed' && last.personId ? `Use testimonials: ["${last.personId}"] in vivid_generate_image.` : undefined,
+      hint: last.status === 'completed' && last.personId ? `Use testimonials: ["${last.personId}"] in vivid_generate_image.`
+        : last.status === 'failed' ? undefined : resume,
     });
   }));
 
@@ -679,10 +704,10 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       locale: z.enum(['it', 'en', 'es']).default('it'),
       voice: z.string().optional().describe('gemini: preset name (Kore…); minimax: preset id (Italian_Narrator…) or a cloned voice id; deepgram: model id (aura-2-livia-it…); omnivoice: voice description in English.'),
       emotion: z.enum(['neutral', 'happy', 'sad', 'angry', 'surprised', 'calm', 'whisper', 'fearful']).optional().describe('minimax only.'),
-      referenceAudio: z.string().optional().describe('omnivoice-clone: local path or URL of 3–10 s of the voice to clone.'),
+      referenceAudio: z.string().optional().describe(L('omnivoice-clone: local path or URL of 3–10 s of the voice to clone.', 'omnivoice-clone: URL of 3–10 s of the voice to clone.')),
       referenceText: z.string().optional().describe('omnivoice-clone: transcript of the reference clip (improves accuracy).'),
       speed: z.number().min(0.1).max(5).optional(),
-      outputDir: z.string().optional().describe('Download the MP3 into this local directory.'),
+      ...localOnly({ outputDir: z.string().optional().describe('Download the MP3 into this local directory.') }),
       filename: z.string().optional(),
     },
     // spends credits, adds a new asset
@@ -746,7 +771,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_generate_music', {
     title: 'Generate music (MiniMax Music 3.0)',
-    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-3.0" (default, 14 credits, charged only when the track is ready) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (30 s asked → ~2 min delivered), so trim in the editor. Rendering takes 1–3 minutes: the tool waits up to `waitSec`, then returns `status: "processing"` with a `taskId` — call vivid_music_status with it to get the track. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack; set outputDir to also download it.',
+    description: 'Generate a unique royalty-free track from a text brief (genre, mood, instruments, BPM, use). Providers: "minimax-music-3.0" (default, 14 credits, charged only when the track is ready) — full studio arrangements at 44.1 kHz/256 kbps, instrumental or with vocals (pass `lyrics`, [Verse]/[Chorus] tags allowed); it has NO exact length control: `durationSec` is a strong hint (30 s asked → ~2 min delivered), so trim in the editor. Rendering takes 1–3 minutes: the tool waits up to `waitSec`, then returns `status: "processing"` with a `taskId` — call vivid_music_status with it to get the track. Returns a public URL (7-day temp storage) usable as an editor audio clip or video soundtrack' + L('; set outputDir to also download it.', '.'),
     inputSchema: {
       prompt: z.string().min(3).max(1500).describe('Style brief in English: genre, mood, instruments, tempo, what it accompanies.'),
       durationSec: z.number().int().min(5).max(300).default(60),
@@ -754,7 +779,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       instrumental: z.boolean().default(true).describe('false = with vocals (MiniMax only; give lyrics or let it write them).'),
       lyrics: z.string().max(3000).optional().describe('MiniMax with vocals: the lyrics, optionally with [Verse]/[Chorus]/[Bridge] tags.'),
       waitSec: z.number().int().min(0).max(240).default(io ? 240 : 40).describe('How long to wait for the track before returning a taskId to poll. Hosted connectors time out after about a minute, so keep it short there.'),
-      outputDir: z.string().optional().describe('Download the file into this local directory.'),
+      ...localOnly({ outputDir: z.string().optional().describe('Download the file into this local directory.') }),
       filename: z.string().optional(),
     },
     // spends credits, adds a new asset
@@ -774,7 +799,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     inputSchema: {
       taskId: z.string().min(6),
       waitSec: z.number().int().min(0).max(240).default(io ? 240 : 40),
-      outputDir: z.string().optional().describe('Download the file into this local directory.'),
+      ...localOnly({ outputDir: z.string().optional().describe('Download the file into this local directory.') }),
       filename: z.string().optional(),
     },
     // polls; on completion the server stores the file and charges the reserved price once
@@ -795,13 +820,13 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_transcribe', {
     title: 'Transcribe audio/video (word timestamps, SRT/VTT)',
-    description: 'Speech-to-text with Deepgram Nova-3 (free). Input: a VIVID asset id, a public URL, or a local audio/video file (uploaded for you). Returns JSON with `words[]` (raw per-word startMs/endMs — use these for voice↔subtitle alignment), readable `cues[]` (3–8 words, timing stretched for legibility) and the full `transcript`; or a ready-to-use SRT / VTT file (format=srt|vtt, granularity=cue|word), optionally written to outputPath. Languages: it, en, es. Max 100 MB.',
+    description: 'Speech-to-text with Deepgram Nova-3 (free). Input: a VIVID asset id, a public URL' + L(', or a local audio/video file (uploaded for you).', '.') + ' Returns JSON with `words[]` (raw per-word startMs/endMs — use these for voice↔subtitle alignment), readable `cues[]` (3–8 words, timing stretched for legibility) and the full `transcript`; or a ready-to-use SRT / VTT file (format=srt|vtt, granularity=cue|word), optionally written to outputPath. Languages: it, en, es. Max 100 MB.',
     inputSchema: {
-      source: z.string().min(1).describe('Asset id (32 hex chars), http(s) URL, or local file path of the audio/video.'),
+      source: z.string().min(1).describe(L('Asset id (32 hex chars), http(s) URL, or local file path of the audio/video.', 'Asset id (32 hex chars) or http(s) URL of the audio/video.')),
       language: z.enum(['it', 'en', 'es']).default('it'),
       format: z.enum(['json', 'srt', 'vtt']).default('json'),
       granularity: z.enum(['cue', 'word']).default('cue').describe('srt/vtt only: one block per readable cue, or one per word (karaoke / alignment checks).'),
-      outputPath: z.string().optional().describe('srt/vtt only: write the subtitle file here.'),
+      ...localOnly({ outputPath: z.string().optional().describe('srt/vtt only: write the subtitle file here.') }),
     },
     // free; may upload the file and write a local subtitle file
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -837,24 +862,40 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     title: 'Retouch one object in an image (masked edit)',
     description: 'Edit ONLY one object/area of an image and leave every other pixel untouched — e.g. "the ring on the left hand" → "make it a plain yellow gold band". Say WHERE with `target` (plain text: the tool locates it with a two-pass labelled-grid vision step, ~40–60 s), or `region` {x,y,w,h} as fractions of the frame, or a `mask` image (white = edit). A square crop around the target goes to the edit model at full resolution and the original bytes are composited back outside a feathered region, so the rest of the photo is byte-identical. Models: nano-banana (default, 6 credits, best fidelity), seedream (4), grok (3), z-image (2, true mask inpaint — needs region or mask). Returns the new asset id + download URL; chain with vivid_compare_product to verify against the SKU and feed its fixPrompt back here.',
     inputSchema: {
-      source: z.string().min(1).describe('Asset id (32 hex), VIVID temp URL, other URL or local file path of the image to edit.'),
+      source: z.string().min(1).describe(L('Asset id (32 hex), VIVID temp URL, other URL or local file path of the image to edit.', 'Asset id (32 hex), VIVID temp URL or other URL of the image to edit.')),
       prompt: z.string().min(3).max(1500).describe('What the target should become. Be concrete about material, colour, shape; the tool adds the "change nothing else" constraints.'),
       target: z.string().max(300).optional().describe('Plain-text description of the object/area to edit, e.g. "the ring on the ring finger".'),
       region: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0).max(1), h: z.number().min(0).max(1) }).optional().describe('Explicit bounding box, fractions of width/height (top-left origin). Skips the locate step.'),
-      mask: z.string().optional().describe('Mask image (white = edit, black = keep), any size: local path, URL or asset id.'),
+      mask: z.string().optional().describe(L('Mask image (white = edit, black = keep), any size: local path, URL or asset id.', 'Mask image (white = edit, black = keep), any size: URL or asset id.')),
       model: z.enum(['nano-banana', 'seedream', 'grok', 'z-image']).default('nano-banana'),
       filename: z.string().optional(),
-      outputDir: z.string().optional().describe('Also download the result into this local directory.'),
+      ...localOnly({ outputDir: z.string().optional().describe('Also download the result into this local directory.') }),
+      ...remoteOnly({ jobId: z.string().optional().describe('Resume waiting on a retouch that returned status "processing" (no new charge).') }),
     },
     // spends credits, adds a new asset (the original is untouched)
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, guarded(async (a) => {
+    // Hosted connector: the locate + edit steps often outlast its ~1 min cut,
+    // so run it on the queue and wait ~40 s; the local server stays sync.
+    const finishAsync = async (jobId: string) => {
+      const r = await pollUntilDone(async () => (await client.get<JobStatus>(`/api/ai/image-status/${jobId}`)).data, 40_000, 3000);
+      const done = r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled';
+      return json({
+        jobId, status: r.status, assetId: r.assetId, downloadUrl: await dl(r.downloadUrl ?? r.assetId), error: r.error,
+        hint: done ? undefined : `Still retouching (already paid): call vivid_retouch again with the same source and jobId "${jobId}" to keep waiting, or vivid_job_status — do NOT retouch again.`,
+      });
+    };
+    if (!io && a.jobId) return finishAsync(a.jobId);
     if (!a.target && !a.region && !a.mask) throw new VividApiError('one of target, region or mask is required', 400);
     const src = await imageRef(a.source);
     const body: Record<string, unknown> = { sourceAssetId: src.assetId, sourceUrl: src.url, prompt: a.prompt, target: a.target, region: a.region, model: a.model, filename: a.filename };
     if (a.mask) {
       const m = await imageRef(a.mask);
       body.maskUrl = m.url ?? `${client.apiUrl}/api/assets/${m.assetId}/download`;
+    }
+    if (!io) {
+      const { data: started } = await client.post<{ jobId: string }>('/api/ai/retouch', { ...body, async: true });
+      return finishAsync(started.jobId);
     }
     const { data } = await client.post<Record<string, unknown> & { assetId: string; downloadUrl: string }>('/api/ai/retouch', body);
     let path: string | undefined;
@@ -871,8 +912,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     title: 'Compare a render with the SKU reference (visual QC)',
     description: 'Visual quality control: checks that the product in a generated/retouched image matches the real product photo (SKU card). Vision LLM compares shape, proportions, materials/finish, colours, stones/elements, logos, hardware — product only, background ignored. Returns match 0–1, verdict pass|review|fail, a list of differences with severity, a summary and a `fixPrompt` you can pass straight to vivid_retouch. 1 credit, ~15–25 s.',
     inputSchema: {
-      candidate: z.string().min(1).describe('Image to check: asset id, URL or local path.'),
-      reference: z.string().min(1).describe('SKU / real product photo: asset id, URL or local path.'),
+      candidate: z.string().min(1).describe(L('Image to check: asset id, URL or local path.', 'Image to check: asset id or URL.')),
+      reference: z.string().min(1).describe(L('SKU / real product photo: asset id, URL or local path.', 'SKU / real product photo: asset id or URL.')),
       skuDescription: z.string().max(2000).optional().describe('SKU notes: material, stone, colour, size… anything the reference photo does not show.'),
       focus: z.string().max(300).optional().describe('Which object to compare when the candidate shows several, e.g. "the ring on the hand".'),
       language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the summary.'),
@@ -984,7 +1025,7 @@ Keyframes & effects (v2): SET_ANIMATIONS {objectId, objectType:'canvas'|'text', 
 Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, preset:'speed-up'|'slow-down'|'slow-mo-hit'|'punch-in'|'ease-in-out'|'none'} or {clipId, keyframes:[{t (ms from clip start on the timeline), v (rate 0.1–8)}]} gives a variable speed (linear between keyframes; the clip keeps its timeline duration unless the source runs out, then it is shortened). Ids: read them from vivid_get_editor_project or from "created" in the previous result; a batch is applied one command at a time, so a later command can use a clip created earlier in the same batch.`;
 
   const mediaSchema = z.object({
-    source: z.string().min(1).describe('VIVID asset id (32 hex), URL or local file path (uploaded as editor media).'),
+    source: z.string().min(1).describe(L('VIVID asset id (32 hex), URL or local file path (uploaded as editor media).', 'VIVID asset id (32 hex) or URL (uploaded as editor media).')),
     name: z.string().optional(),
     durationMs: z.number().int().positive().optional().describe('Supply when the API does not know it (uploaded videos); otherwise it is read from the asset/job or probed.'),
     width: z.number().int().positive().optional(),
@@ -996,9 +1037,9 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
 
   server.registerTool('vivid_analyze_audio', {
     title: 'Analyze audio: tempo (BPM) and peaks',
-    description: 'Tempo and transient analysis of a music / voice file, computed on the VIVID server (free, cached per asset). Returns bpm, firstBeatMs, the beat grid (beats[] / downbeats[] in ms from the start of the file, constant tempo) and peaks[] — the detected hits/accents/drops ({ms, strength 0–1}). Use beats for metronomic cuts and peaks for cuts on what the ear hears (dynamic montage, "tagli sui picchi"): pass them as clip boundaries (UPDATE_CLIP startMs/durationMs) or let CUT_TO_BEAT do it (grid beats|peaks). Input: VIVID asset id, public URL or local file (uploaded for you). MP3 or WAV only — convert other formats first (ffmpeg -c:a libmp3lame). First 90 s analysed by default.',
+    description: 'Tempo and transient analysis of a music / voice file, computed on the VIVID server (free, cached per asset). Returns bpm, firstBeatMs, the beat grid (beats[] / downbeats[] in ms from the start of the file, constant tempo) and peaks[] — the detected hits/accents/drops ({ms, strength 0–1}). Use beats for metronomic cuts and peaks for cuts on what the ear hears (dynamic montage, "tagli sui picchi"): pass them as clip boundaries (UPDATE_CLIP startMs/durationMs) or let CUT_TO_BEAT do it (grid beats|peaks). Input: VIVID asset id' + L(', public URL or local file (uploaded for you)', ' or public URL') + '. MP3 or WAV only — convert other formats first (ffmpeg -c:a libmp3lame). First 90 s analysed by default.',
     inputSchema: {
-      source: z.string().min(1).describe('Asset id (32 hex chars), http(s) URL, or local MP3/WAV path.'),
+      source: z.string().min(1).describe(L('Asset id (32 hex chars), http(s) URL, or local MP3/WAV path.', 'Asset id (32 hex chars) or http(s) URL of an MP3/WAV.')),
       mode: z.enum(['bpm', 'peaks', 'both']).default('both'),
       bpmHint: z.number().min(40).max(240).optional().describe('Known tempo; fixes half/double-tempo detections. A "128 BPM" in the file name is picked up automatically.'),
       minGapMs: z.number().int().min(50).max(5000).optional().describe('Minimum distance between two peaks (default 250 ms). Raise it (600–1500) for fewer, bigger accents.'),
@@ -1044,7 +1085,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
 
   server.registerTool('vivid_create_editor_project', {
     title: 'Create a video editor project',
-    description: `Create a new editor project (timeline) on the account: pick a canvas preset, import media (VIVID assets, URLs or local files), optionally apply an initial batch of commands, and save. Returns the project id (use it with vivid_edit_timeline / vivid_render_project) and the timeline summary. Media added here is available to ADD_CLIP by its local id (= asset id unless localId is given).\n${COMMANDS_DOC}`,
+    description: `Create a new editor project (timeline) on the account: pick a canvas preset, import media (VIVID assets, URLs${io ? ' or local files' : ''}), optionally apply an initial batch of commands, and save. Returns the project id (use it with vivid_edit_timeline / vivid_render_project) and the timeline summary. Media added here is available to ADD_CLIP by its local id (= asset id unless localId is given).\n${COMMANDS_DOC}`,
     inputSchema: {
       name: z.string().min(1).max(120),
       canvasPreset: z.enum(['landscape', 'landscape-fhd', 'portrait', 'portrait-fhd', 'square', 'social']).default('portrait-fhd'),
