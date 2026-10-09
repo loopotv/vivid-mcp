@@ -1109,17 +1109,17 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     const editor = openHeadlessProject(file, { resolveUrl: resolveAssetUrl(client) });
     const imported = await addMedia(editor, a.media);
     const audioAnalysis = needsBeatAnalysis(a.commands) ? await ensureBeatAnalysis(client, editor) : undefined;
-    const result = a.commands?.length ? editor.apply(a.commands as unknown as AiCommand[]) : { applied: 0, errors: [], created: undefined };
+    const result = a.commands?.length ? editor.apply(a.commands as unknown as AiCommand[]) : { applied: 0, errors: [], warnings: [], created: undefined };
     const out = editor.toProjectFile();
     const check = projectSchemaV2.safeParse(out);
     if (!check.success) throw new VividApiError(`Project failed validation before save: ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);
     const { assetId } = await saveProject(client, out, a.name);
-    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, audioAnalysis, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { subtitles: subtitlesOf(editor) }) });
+    return json({ projectAssetId: assetId, editUrl: editUrlFor(client, assetId), imported, audioAnalysis, applied: result.applied, errors: result.errors, ...(result.warnings.length ? { warnings: result.warnings } : {}), created: result.created, timeline: summarize(editor.store.getState(), { subtitles: subtitlesOf(editor) }) });
   }));
 
   server.registerTool('vivid_edit_timeline', {
     title: 'Edit a video editor project (timeline commands)',
-    description: `Apply editing commands to a saved editor project — clips, trims, speed and speed ramps, transitions, canvas preset (16:9 ↔ 9:16), texts (incl. animated gradient fills), word-level subtitles, masks, keyframes, audio — through the same orchestrator as the in-app Art Director, then save it back under the same id. Optionally import media first. Returns applied/errors, the ids created, and the updated timeline. Render the result with vivid_render_project.\n${COMMANDS_DOC}`,
+    description: `Apply editing commands to a saved editor project — clips, trims, speed and speed ramps, transitions, canvas preset (16:9 ↔ 9:16), texts (incl. animated gradient fills), word-level subtitles, masks, keyframes, audio — through the same orchestrator as the in-app Art Director, then save it back under the same id. Optionally import media first. Returns applied/errors (plus warnings for things applied but likely not visible, e.g. motion blur on a still clip), the ids created, and the updated timeline. Render the result with vivid_render_project.\n${COMMANDS_DOC}`,
     inputSchema: {
       projectAssetId: z.string().min(1),
       commands: commandsSchema.min(1),
@@ -1141,7 +1141,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       await saveProject(client, out, out.projectName || 'Editor Project', a.projectAssetId);
       saved = true;
     }
-    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, audioAnalysis, applied: result.applied, errors: result.errors, created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }) });
+    return json({ projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), saved, imported, audioAnalysis, applied: result.applied, errors: result.errors, ...(result.warnings.length ? { warnings: result.warnings } : {}), created: result.created, timeline: summarize(editor.store.getState(), { missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }) });
   }));
 
   server.registerTool('vivid_render_project', {
