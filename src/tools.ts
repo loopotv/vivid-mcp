@@ -631,10 +631,11 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_create_testimonial', {
     title: 'Create a testimonial (AI model / persona)',
-    description: 'Create a reusable TESTIMONIAL on the account — a consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked). Two ways: `photos` = three photos of a REAL person (left profile, front, right profile) → composite identity (you must have that person\'s consent; it is recorded); or `attributes` = design the person from scratch (gender, age, ethnicity required; optional bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
+    description: 'Create a reusable TESTIMONIAL on the account — a consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked). Two ways: `photos` = three photos of a REAL person (left profile, front, right profile) → composite identity. Requires `consent: true`: set it ONLY after the user has confirmed that the person pictured is them or has consented to being turned into a virtual presenter; the consent is recorded with time and IP, and photos with nudity or sexual content are refused; or `attributes` = design the person from scratch (gender, age, ethnicity required; optional bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
     inputSchema: {
       photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe(L('Local paths or URLs of the three views of a real person.', 'URLs of the three views of a real person.')),
       attributes: z.record(z.string(), z.string()).optional().describe('From-scratch persona attributes (gender, age, ethnicity + optional look fields).'),
+      consent: z.boolean().optional().describe('Required with `photos`: true only once the user has confirmed the person pictured is them or has given consent. Never assume it.'),
       locale: z.enum(['it', 'en', 'es']).default('it'),
       projectId: z.string().optional(),
       wait: z.boolean().default(true),
@@ -648,12 +649,16 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     if (a.jobId) {
       jobId = a.jobId;
     } else if (a.photos) {
+      if (a.consent !== true) {
+        throw new VividApiError('Creating a testimonial from photos of a real person needs consent: true. Ask the user to confirm that the person pictured is them or has consented; if they cannot, use `attributes` to design a person instead.', 400);
+      }
       const form = new FormData();
       for (const view of ['left', 'front', 'right'] as const) {
         const f = await client.loadSource(a.photos[view]);
         form.append(view, f.blob, f.filename);
       }
       form.append('locale', a.locale);
+      form.append('consent', 'true');
       if (a.projectId) form.append('projectId', a.projectId);
       jobId = (await client.post<{ jobId: string }>('/api/ai/create-testimonial', form)).data.jobId;
     } else if (a.attributes) {

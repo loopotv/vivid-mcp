@@ -29,7 +29,7 @@ This is free, and it counts against the plan's monthly analysis quota.
 
 Two routes, both costing 50 credits — announce the cost and wait for a yes.
 
-- **From photos of a real person**: three views (left profile, front, right profile) via `vivid_create_testimonial` `photos`. Only with that person's explicit consent, which the account records. If the user cannot confirm consent, stop and offer the attributes route instead.
+- **From photos of a real person**: three views (left profile, front, right profile) via `vivid_create_testimonial` `photos`. Only with that person's explicit consent: ask the user to confirm it, then pass `consent: true` (VIVID records it with time and IP). Never set it on your own. If the user cannot confirm consent, stop and offer the attributes route instead. Photos with nudity or sexual content are refused.
 - **From attributes**: `vivid_create_testimonial` `attributes` with at least `gender`, `age`, `ethnicity` (values in English, e.g. "Female", "25-35", "Mediterranean"), plus any of hair, eyes, skin, expression, body type. VIVID assigns the name.
 
 ## Use the cast

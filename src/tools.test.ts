@@ -185,6 +185,24 @@ describe('vivid-mcp tools', () => {
     expect(bad.isError).toBe(true);
   }, 20000);
 
+  it('vivid_create_testimonial from photos refuses without consent and forwards it when given', async () => {
+    routes.set('POST /api/ai/create-testimonial', () => ({ status: 202, body: { success: true, data: { jobId: 't2', status: 'processing' } } }));
+    const client = await connect();
+    const photos = { left: 'https://cdn/l.jpg', front: 'https://cdn/f.jpg', right: 'https://cdn/r.jpg' };
+    const bad = await client.callTool({ name: 'vivid_create_testimonial', arguments: { photos, wait: false } });
+    expect(bad.isError).toBe(true);
+    expect(textOf(bad)).toContain('consent: true');
+    expect(calls.find((c) => c.path === '/api/ai/create-testimonial')).toBeUndefined();
+
+    for (const v of ['l', 'f', 'r']) routes.set(`GET /${v}.jpg`, () => ({ raw: true, body: 'jpegbytes' }));
+    let sent: FormData | undefined;
+    routes.set('POST /api/ai/create-testimonial', (init) => { sent = init.body as FormData; return { status: 202, body: { success: true, data: { jobId: 't2', status: 'processing' } } }; });
+    const ok = await client.callTool({ name: 'vivid_create_testimonial', arguments: { photos, consent: true, wait: false } });
+    expect(ok.isError).toBeFalsy();
+    expect(sent?.get('consent')).toBe('true');
+    expect(sent?.get('front')).toBeTruthy();
+  }, 20000);
+
   it('vivid_generate_video returns the jobId without waiting and forwards routing fields', async () => {
     routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', taskId: 't1', estimatedTime: '60-120 secondi', creditsRemaining: 200, warning: 'frames folded' } } }));
     const client = await connect();
