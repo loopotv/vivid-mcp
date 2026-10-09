@@ -38,6 +38,8 @@ interface Asset {
   id: string; job_id: string | null; type: string; category?: string; filename: string;
   is_favorite: number | boolean; is_public: number | boolean; share_token?: string | null; created_at: string;
   thumbUrl?: string;
+  /** What the file is and what to tell the audience when publishing it (AI Act art. 50). null = the user's own upload. */
+  disclosure?: { kind: 'avatar' | 'product_photo' | 'concept' | 'generated'; notice: string } | null;
 }
 
 interface MentionItem {
@@ -513,13 +515,13 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     if (!/\.[a-z0-9]{2,4}$/i.test(name)) name = `${name}.${extensionFor(contentType)}`;
     const path = io!.join(outputDir, name);
     await io!.writeFile(path, bytes);
-    return json({ path, bytes: bytes.byteLength, contentType });
+    return json({ path, bytes: bytes.byteLength, contentType, ...(meta.disclosure ? { disclosure: meta.disclosure } : {}) });
   }));
   }
 
   server.registerTool('vivid_share_asset', {
     title: 'Share / unshare asset',
-    description: 'Make an asset public and get a shareable URL (no login required), or revoke sharing. Also toggles the favorite flag.',
+    description: 'Make an asset public and get a shareable URL (no login required), or revoke sharing. Also toggles the favorite flag. The reply carries `disclosure.notice`: relay it to the user when they share or publish AI-generated content.',
     inputSchema: {
       assetId: z.string(),
       public: z.boolean().optional().describe('true = publish and return the public URL, false = unpublish.'),
@@ -536,6 +538,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     return json({
       id: data.id, favorite: !!data.is_favorite, public: !!data.is_public,
       publicUrl: data.is_public && data.share_token ? client.url(`/api/public/assets/${data.share_token}`) : undefined,
+      ...(data.disclosure ? { disclosure: data.disclosure } : {}),
     });
   }));
 

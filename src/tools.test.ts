@@ -267,6 +267,14 @@ describe('vivid-mcp tools', () => {
     expect(out).toEqual({ id: 'a1', favorite: false, public: true, publicUrl: 'https://api.test/api/public/assets/tok123' });
   });
 
+  it('vivid_share_asset relays the AI disclosure the API attaches', async () => {
+    const disclosure = { kind: 'avatar', notice: 'AI-generated: the person is virtual.' };
+    routes.set('PATCH /api/assets/a2', () => ({ body: { success: true, data: { id: 'a2', is_public: 1, is_favorite: 0, share_token: 't2', disclosure } } }));
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_share_asset', arguments: { assetId: 'a2', public: true } })));
+    expect(out.disclosure).toEqual(disclosure);
+  });
+
   it('vivid_render_project enqueues a job and returns the browser URL without opening it', async () => {
     routes.set('POST /api/render-jobs', (init) => {
       expect(JSON.parse(init.body as string)).toEqual({ projectAssetId: 'p1', name: 'spot' });
