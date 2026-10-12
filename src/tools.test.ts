@@ -491,6 +491,21 @@ describe('vivid-mcp tools', () => {
       expect(calls.some((c) => c.path === '/api/ai/save-editor-project')).toBe(false);
     });
 
+    it('vivid_edit_timeline keyframes an effect value (SET_EFFECT_KEYFRAMES) and keeps it on save', async () => {
+      wire();
+      routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
+      const client = await connect();
+      const created = JSON.parse(textOf(await client.callTool({ name: 'vivid_create_editor_project', arguments: { name: 'Spot', media: [{ source: A }], commands: [{ type: 'ADD_CLIP', payload: { assetId: A } }] } })));
+      const objectId = created.created.canvasObjects[0];
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [
+        { type: 'ADD_EFFECT', payload: { objectId, objectType: 'canvas', effect: { type: 'cameraShake', intensity: 0 } } },
+        { type: 'SET_EFFECT_KEYFRAMES', payload: { objectId, objectType: 'canvas', effectType: 'cameraShake', param: 'intensity', keyframes: [{ t: 0, v: 0, easing: 'easeInCubic' }, { t: 1800, v: 0.9 }] } },
+      ] } })));
+      expect(out.errors).toEqual([]);
+      const raw = JSON.parse(textOf(await client.callTool({ name: 'vivid_get_editor_project', arguments: { projectAssetId: P, raw: true } })));
+      expect(raw.canvasObjects[0].effects[0].keyframes.intensity).toEqual([{ t: 0, v: 0, easing: 'easeInCubic' }, { t: 1800, v: 0.9 }]);
+    });
+
     it('vivid_edit_timeline saves and reopens a punch-in (keyframes on scale only)', async () => {
       wire();
       routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
