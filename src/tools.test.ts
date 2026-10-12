@@ -490,6 +490,20 @@ describe('vivid-mcp tools', () => {
       expect(out.errors.some((e: string) => /Unknown command type/.test(e))).toBe(true);
       expect(calls.some((c) => c.path === '/api/ai/save-editor-project')).toBe(false);
     });
+
+    it('vivid_edit_timeline saves and reopens a punch-in (keyframes on scale only)', async () => {
+      wire();
+      routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
+      const client = await connect();
+      await client.callTool({ name: 'vivid_create_editor_project', arguments: { name: 'Spot', media: [{ source: A }], commands: [{ type: 'ADD_CLIP', payload: { assetId: A } }] } });
+      const r = await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [{ type: 'APPLY_EFFECT_RECIPE', payload: { recipe: 'punch-in' } }] } });
+      expect(r.isError).toBeFalsy();
+      expect(JSON.parse(textOf(r))).toMatchObject({ saved: true, errors: [] });
+      const again = await client.callTool({ name: 'vivid_get_editor_project', arguments: { projectAssetId: P, raw: true } });
+      expect(again.isError).toBeFalsy();
+      const obj = (JSON.parse(textOf(again)) as { canvasObjects: Array<{ animations?: Record<string, unknown> }> }).canvasObjects[0];
+      expect(Object.keys(obj.animations!)).toEqual(['scale']);
+    });
   });
 
   it('vivid_generate_voice minimax passes the voice id and emotion to tts-v2', async () => {
