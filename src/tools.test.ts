@@ -592,6 +592,23 @@ describe('audio analysis (server-side beats + peaks)', () => {
     expect(cut.saved).toBe(true);
   });
 
+  it('the beat-flash recipe alone fetches the analysis too', async () => {
+    wire();
+    const client = await connect();
+    const created = JSON.parse(textOf(await client.callTool({ name: 'vivid_create_editor_project', arguments: {
+      name: 'Beat', media: [{ source: V }, { source: M }],
+      commands: [{ type: 'ADD_TRACK', payload: { type: 'audio' } }, { type: 'ADD_CLIP', payload: { assetId: V } }, { type: 'ADD_CLIP', payload: { assetId: M } }],
+    } })));
+    const audioClip = (created.timeline.clips as Array<{ id: string; mediaType: string }>).find((c) => c.mediaType === 'audio')!;
+    calls.length = 0;
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [
+      { type: 'APPLY_EFFECT_RECIPE', payload: { recipe: 'beat-flash', everyBeats: 4, audioClipId: audioClip.id } },
+    ] } })));
+    expect(out.errors).toEqual([]);
+    expect(calls.filter((c) => c.path === '/api/ai/audio-analysis')).toHaveLength(1);
+    expect(out.timeline.canvasObjects[0].effects).toEqual(['flash']);
+  });
+
   it('reports a failed analysis per asset instead of throwing', async () => {
     wire();
     routes.set('POST /api/ai/audio-analysis', () => ({ status: 415, body: { success: false, error: 'Unsupported audio format "audio/mp4"' } }));
