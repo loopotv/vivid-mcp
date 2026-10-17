@@ -11,7 +11,10 @@ import { VERSION } from './meta.js';
  * the vivid-studio skill uses when the agent has a shell but no MCP connection.
  */
 
-export const CLI_COMMANDS = new Set(['call', 'tools', 'schema', 'help', '--help', '-h', '--version', '-v']);
+/** Longest tool wait (vivid_render_project timeoutSec 1800) plus margin. */
+const CALL_TIMEOUT_MS = 35 * 60_000;
+
+export const CLI_COMMANDS =new Set(['call', 'tools', 'schema', 'help', '--help', '-h', '--version', '-v']);
 
 const USAGE = `vivid-mcp ${VERSION}
 
@@ -82,7 +85,9 @@ export async function runCli(argv: string[], makeServer: () => McpServer): Promi
     }
 
     const args = await readArgs(rawArgs);
-    const result = await client.callTool({ name: tool.name, arguments: args });
+    // The SDK's default request timeout is 60 s; tools with wait/timeoutSec
+    // (analysis, generations, renders) bound themselves, so the CLI must not.
+    const result = await client.callTool({ name: tool.name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS });
     for (const c of result.content as Array<{ type: string; text?: string; mimeType?: string }>) {
       if (c.type === 'text') console.log(c.text);
       else console.log(`[${c.type}${c.mimeType ? ` ${c.mimeType}` : ''} content omitted]`);

@@ -23,7 +23,7 @@ Call `vivid_list_references` before anything else and show the user the names. M
 3. It returns the analysis (name, category, colours, material) and a clean e-commerce render, and saves the product to the account. Report the assigned name — the user can rename it in the app.
 4. From then on, pass that name in `vivid_generate_image` `products`.
 
-This is free, and it counts against the plan's monthly analysis quota.
+It costs 10 credits (refunded if the analysis fails) and counts against the plan's monthly analysis quota.
 
 ## Create a testimonial
 

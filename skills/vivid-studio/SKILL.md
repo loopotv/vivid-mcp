@@ -29,7 +29,7 @@ npx -y vivid-mcp@latest call edit_timeline @args.json   # long or quoted argumen
 
 - The `vivid_` prefix is optional on the command line. Output is the tool's JSON on stdout; exit code 1 means the tool reported an error — show its text to the user.
 - Argument names are camelCase exactly as in `schema` (`aspectRatio`, not `aspect_ratio`). Unknown names are silently ignored and the default applies, so check the schema before the first call of each tool.
-- Needs vivid-mcp 0.30.0 or later (`npx -y vivid-mcp@latest --version`).
+- Needs vivid-mcp 0.30.1 or later (`npx -y vivid-mcp@latest --version`).
 - Write arguments to a temporary `.json` file and pass `@file` whenever they contain quotes, newlines or more than a few fields. Shell-quoting JSON by hand is the most common failure.
 - If `VIVID_API_KEY` is not set, ask the user for it (they create it on vividai.tv → Settings). Never print the key back, never write it into project files.
 - Option B runs on the user's machine, so local file paths work wherever a tool accepts a "local path".
@@ -46,8 +46,8 @@ Most tools spend the user's VIVID credits. These rules apply to every workflow:
 4. Never pick a model slug, voice or duration you have not seen in a listing.
 5. When a call fails, report the error text as-is. Retry once at most, then propose an alternative (another model, a shorter duration).
 
-Free tools: `whoami`, `usage`, all `list_*`, `get_*`, `job_status`, `render_status`, `music_status`, `transcribe`, `analyze_audio`, `analyze_product` (counts toward a monthly quota), `product_sheet` without `create`, `upload_file`, `share_asset`, `download_asset`, `create_editor_project`, `edit_timeline`, `render_project`, `record_ui`.
-Show credits rounded to two decimals.
+Free tools: `whoami`, `usage`, all `list_*`, `get_*`, `job_status`, `render_status`, `music_status`, `transcribe`, `analyze_audio`, `product_sheet` without `create`, `upload_file`, `share_asset`, `download_asset`, `create_editor_project`, `edit_timeline`, `render_project`, `record_ui`.
+Show credits rounded to two decimals. `analyze_product` is not free: 10 credits.
 
 ## 3. Pick the workflow
 

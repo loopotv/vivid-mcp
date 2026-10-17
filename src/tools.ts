@@ -584,7 +584,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_analyze_product', {
     title: 'Analyze a product photo (save as product)',
-    description: 'Run VIVID\'s "Analizza prodotto" on a product photo: vision analysis (name, category, colors, material, finish, style, keywords) + a clean e-commerce render, saved to the account as a PRODUCT you can then feature by name in vivid_generate_image `products` (see vivid_list_references). Free — counts toward the plan\'s monthly analysis quota (50/month on Free). Takes 30–90 s; waits by default. For jewelry the geometry lock may ask the app to confirm the category; the name comes from the analysis (rename in the app if needed).',
+    description: 'Run VIVID\'s "Analizza prodotto" on a product photo: vision analysis (name, category, colors, material, finish, style, keywords) + a clean e-commerce render, saved to the account as a PRODUCT you can then feature by name in vivid_generate_image `products` (see vivid_list_references). Costs 10 credits (refunded if the analysis fails) and counts toward the plan\'s monthly analysis quota. Takes 30–90 s; waits by default. For jewelry the geometry lock may ask the app to confirm the category; the name comes from the analysis (rename in the app if needed).',
     inputSchema: {
       image: z.string().min(1).optional().describe(L(
         'Product photo: absolute local path (preferred — uploaded as multipart) or URL (JPEG/PNG/WebP, max 15 MB; some CDNs such as Pexels refuse server-side downloads → use a local path). URLs from vivid_upload_file work too.',
