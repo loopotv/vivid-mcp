@@ -46,6 +46,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | **Claude Code plugin** | `/plugin install vivid@vivid` — OAuth, plus the VIVID skills | no | no |
 | **Claude Desktop extension** | download [`vivid-mcp.mcpb`](https://vividai.tv/downloads/vivid-mcp.mcpb), double-click, paste the key | no (bundled runtime) | yes |
 | **Local (npx)** | `npx -y vivid-mcp` with `VIVID_API_KEY` | Node.js 20+ | yes |
+| **Command line** | `npx -y vivid-mcp call <tool> '<json>'` with `VIVID_API_KEY` — no MCP client | Node.js 20+ | yes |
 
 ### Remote (nothing to install)
 
@@ -110,6 +111,22 @@ claude mcp add vivid -e VIVID_API_KEY=vk_xxx -- npx -y vivid-mcp
 
 Same command: `npx -y vivid-mcp` with `VIVID_API_KEY` in the environment.
 
+### Command line (no MCP client)
+
+The same tools run from a shell, through an in-memory MCP client — same arguments, same validation, same results.
+This is what the `vivid-studio` skill uses in agents that have a terminal but no MCP connection.
+
+```bash
+export VIVID_API_KEY=vk_xxx
+npx -y vivid-mcp tools                       # every tool with its title
+npx -y vivid-mcp schema generate_image       # description + JSON schema of the arguments
+npx -y vivid-mcp call whoami                 # the vivid_ prefix is optional
+npx -y vivid-mcp call generate_image '{"prompt":"…","model":"nano-banana-2"}'
+npx -y vivid-mcp call edit_timeline @args.json   # or - to read stdin
+```
+
+The tool's text result goes to stdout; the exit code is 1 when the tool reports an error.
+
 ### Environment
 
 | Variable | Required | Default |
@@ -163,7 +180,12 @@ MIT
 
 ## Skills
 
-`skills/` holds the skill bundles submitted with the ChatGPT app (one folder, one `SKILL.md` each,
-[per OpenAI's format](https://learn.chatgpt.com/docs/build-skills)): `vivid-product-photos`,
-`vivid-product-video`, `vivid-brand-cast`. They are plain instructions on top of the tools above —
-no code — so any MCP client can read them as a playbook.
+`skills/` holds the skill bundles (one folder, one `SKILL.md` each, [open SKILL.md format](https://learn.chatgpt.com/docs/build-skills)):
+
+- `vivid-studio` — the whole studio in one skill: images, retouch and QC, video, voice, music, transcription,
+  timeline editing and render, screen recording. `SKILL.md` routes to `references/*.md` per area and runs the
+  tools through MCP when connected, otherwise through the command line above.
+- `vivid-product-photos`, `vivid-product-video`, `vivid-brand-cast` — narrower skills submitted with the ChatGPT app.
+
+They are plain instructions on top of the tools above — no code of their own.
+Zip a skill folder (`cd skills && zip -r vivid-studio.zip vivid-studio`) to publish it on a skills marketplace.
