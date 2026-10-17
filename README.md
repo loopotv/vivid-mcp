@@ -8,6 +8,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 |---|---|
 | `vivid_whoami` | Account linked to the key: plan, credits |
 | `vivid_usage` | Monthly usage vs plan limits |
+| `vivid_buy_credits` | Link where the user buys a credit pack or turns on auto top-up — the agent never pays, the user confirms in the browser |
 | `vivid_list_models` | Image / video / LLM models with prices and capabilities |
 | `vivid_generate_image` | Text-to-image (with optional product / person / context references), waits for the result |
 | `vivid_generate_video` | Start a video (Seedance 2.5, Kling O3, MiniMax H3, Gemini Omni, LTX, Grok…) |
@@ -161,7 +162,9 @@ VIVID's video editor renders in the browser (Canvas2D + WebCodecs), so `vivid_re
 
 ## Credits
 
-Every generation is charged in VIVID credits according to the model (per image, or credits/second × duration for video). `vivid_list_models` shows the exact prices; `vivid_whoami` shows your balance. Videos are pre-charged when the job starts.
+Every generation is charged in VIVID credits according to the model (per image, or credits/second × duration for video). `vivid_list_models` shows the exact prices; `vivid_whoami` shows your balance and whether auto top-up is on. Videos are pre-charged when the job starts.
+
+Credits come from a plan or from **credit packs** (500 / 1,500 / 5,000 credits from €12.99, valid 12 months, no subscription needed). When credits run out mid-job, the failing call returns a top-up link: the agent shows it, you pay in the browser, the agent retries — finished work is kept. `vivid_buy_credits` returns the same link on demand, sized to the credits still missing. With **auto top-up** on (Billing page on vividai.tv) the job doesn't stop at all: below your threshold VIVID buys the same pack again on your saved card, within a monthly cap you set and at most 5 times a day. Nothing in the MCP can charge your card or switch auto top-up on.
 
 ## Development
 

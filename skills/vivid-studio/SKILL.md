@@ -45,8 +45,9 @@ Most tools spend the user's VIVID credits. These rules apply to every workflow:
 3. Announce the total cost of a paid step and wait for a clear yes before the first paid call. Video always needs a yes; a single cheap image may follow directly from an explicit "generate it".
 4. Never pick a model slug, voice or duration you have not seen in a listing.
 5. When a call fails, report the error text as-is. Retry once at most, then propose an alternative (another model, a shorter duration).
+6. Out of credits (the error says so and carries a top-up link): show the link — or get one from `vivid_buy_credits` with the missing credits — and wait for the user to say they paid, then retry the same call; finished jobs are kept. Never ask for card details: the user pays in the browser. If the error says auto top-up just charged, retry right away.
 
-Free tools: `whoami`, `usage`, all `list_*`, `get_*`, `job_status`, `render_status`, `music_status`, `transcribe`, `analyze_audio`, `product_sheet` without `create`, `upload_file`, `share_asset`, `download_asset`, `create_editor_project`, `edit_timeline`, `render_project`, `record_ui`.
+Free tools: `whoami`, `usage`, `buy_credits` (returns a link, charges nothing), all `list_*`, `get_*`, `job_status`, `render_status`, `music_status`, `transcribe`, `analyze_audio`, `product_sheet` without `create`, `upload_file`, `share_asset`, `download_asset`, `create_editor_project`, `edit_timeline`, `render_project`, `record_ui`.
 Show credits rounded to two decimals. `analyze_product` is not free: 10 credits.
 
 ## 3. Pick the workflow

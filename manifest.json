@@ -4,7 +4,7 @@
   "display_name": "VIVID",
   "version": "0.14.0",
   "description": "Your VIVID content studio inside Claude: product photos, videos, music, voices and timelines from the chat.",
-  "long_description": "Connects your VIVID account (vividai.tv) to Claude Desktop. Ask for product photos, vertical videos, jingles, voice-overs, retouches, transcriptions, cuts to the beat and MP4 renders; the assets land in your VIVID gallery. Uses your plan's credits — nothing extra to buy. Paste your API key from vividai.tv → Settings → API key.",
+  "long_description": "Connects your VIVID account (vividai.tv) to Claude Desktop. Ask for product photos, vertical videos, jingles, voice-overs, retouches, transcriptions, cuts to the beat and MP4 renders; the assets land in your VIVID gallery. Uses your VIVID credits, from a plan or a credit pack; with auto top-up a long job never stops halfway. Paste your API key from vividai.tv → Settings → API key.",
   "author": { "name": "VIVID", "url": "https://vividai.tv" },
   "homepage": "https://vividai.tv/mcp",
   "documentation": "https://github.com/loopotv/vivid-mcp#readme",
