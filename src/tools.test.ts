@@ -62,7 +62,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
+      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
       'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -76,6 +76,31 @@ describe('vivid-mcp tools', () => {
     const out = JSON.parse(textOf(r));
     expect(out).toEqual({ id: 'u1', email: 'a@b.c', name: 'Ale', plan: 'pro', credits: 123.5 });
     expect(JSON.stringify(out)).not.toContain('password');
+  });
+
+  it('a 402 tells the agent to show the top-up link and retry, never to pay', async () => {
+    routes.set('GET /api/me', () => ({ status: 402, body: { success: false, error: 'insufficient_credits', code: 'INSUFFICIENT_CREDITS', topupUrl: 'https://vividai.tv/billing/topup?need=260', autoTopup: 'off' } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_whoami', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('https://vividai.tv/billing/topup?need=260');
+    expect(textOf(r)).toContain('you cannot pay for them');
+  });
+
+  it('a 402 after an auto top-up says to retry at once', async () => {
+    routes.set('GET /api/me', () => ({ status: 402, body: { success: false, error: 'insufficient_credits', autoTopup: 'charged', retry: true } }));
+    const client = await connect();
+    expect(textOf(await client.callTool({ name: 'vivid_whoami', arguments: {} }))).toContain('Retry the same call now');
+  });
+
+  it('vivid_buy_credits returns the link with the missing credits and the packs, and charges nothing', async () => {
+    routes.set('GET /api/billing/topup', () => ({ body: { success: true, data: {
+      packs: [{ id: 'pack_500', credits: 500, priceCents: 1299 }], currency: 'eur', autoTopup: { enabled: false, threshold: 100 },
+    } } }));
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_buy_credits', arguments: { creditsNeeded: 259.5 } })));
+    expect(out).toMatchObject({ url: 'https://api.test/billing/topup?need=260', packs: [{ credits: 500, price: '€12.99' }], autoTopup: { enabled: false } });
+    expect(calls.every((c) => c.method === 'GET')).toBe(true);
   });
 
   it('vivid_list_models summarises video capabilities and pricing', async () => {

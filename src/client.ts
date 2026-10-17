@@ -16,6 +16,8 @@ export class VividApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    /** The whole error body — a 402 carries topupUrl / autoTopup / retry. */
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'VividApiError';
@@ -81,7 +83,7 @@ export class VividClient {
     try { json = JSON.parse(text) as ApiEnvelope<T>; } catch { /* non-JSON body */ }
     if (!res.ok || !json?.success) {
       const msg = json?.error ?? (text ? text.slice(0, 300) : `HTTP ${res.status}`);
-      throw new VividApiError(msg, res.status, json?.code);
+      throw new VividApiError(msg, res.status, json?.code, json as Record<string, unknown> | undefined);
     }
     return { data: json.data as T, pagination: json.pagination };
   }

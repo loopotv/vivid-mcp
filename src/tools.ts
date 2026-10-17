@@ -114,6 +114,13 @@ export interface LocalIo {
   openInBrowser(url: string): boolean;
 }
 
+/** GET /api/billing/topup — the subset the MCP reads. */
+interface TopupInfo {
+  packs: Array<{ id: string; credits: number; priceCents: number }>;
+  currency: 'eur' | 'usd';
+  autoTopup: { enabled: boolean; threshold: number };
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 const text = (s: string): CallToolResult => ({ content: [{ type: 'text', text: s }] });
@@ -126,6 +133,30 @@ function parseJson<T = Record<string, unknown>>(v: unknown): T | undefined {
   try { return JSON.parse(String(v)) as T; } catch { return undefined; }
 }
 
+const DEFAULT_TOPUP_URL = 'https://vividai.tv/billing/topup';
+
+/**
+ * What the agent should do when credits run out (docs/credit-topup.md in
+ * vivid-workers). The agent can never pay: it shows the link, the user
+ * confirms and pays in the browser, then the agent retries the same call.
+ */
+export function outOfCreditsHint(details?: Record<string, unknown>): string {
+  const url = typeof details?.topupUrl === 'string' ? details.topupUrl : DEFAULT_TOPUP_URL;
+  switch (details?.autoTopup) {
+    case 'charged':
+    case 'pending':
+      return 'Auto top-up has just added credits to the account. Retry the same call now.';
+    case 'cap_reached':
+      return `Auto top-up reached the monthly limit the user set. Ask the user to raise the limit or buy a pack here: ${url} — then retry the same call.`;
+    case 'daily_limit':
+      return `Auto top-up already ran the maximum number of times today. Ask the user to buy a pack here: ${url} — then retry the same call.`;
+    case 'failed':
+      return `Auto top-up could not charge the saved card and switched itself off. Ask the user to open ${url} to pay and turn it back on — then retry the same call.`;
+    default:
+      return `Not enough credits. Show the user this link to top up — they choose a pack and pay in their browser; you cannot pay for them: ${url} . When they say it is done, retry the same call (completed jobs are kept). They can also tick "auto top-up" there so long jobs do not stop again.`;
+  }
+}
+
 /** Wrap a tool handler so API errors become readable tool errors, not crashes. */
 function guarded<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
   return async (args) => {
@@ -133,9 +164,10 @@ function guarded<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Prom
       return await fn(args);
     } catch (err) {
       if (err instanceof VividApiError) {
-        const hint = err.status === 401 ? ' (check VIVID_API_KEY — generate one in Settings on vividai.tv)'
-          : err.status === 402 || /crediti insufficienti|insufficient credits|not enough credits/i.test(err.message) ? ' (not enough credits — top up on vividai.tv/billing)'
-          : '';
+        if (err.status === 402 || /crediti insufficienti|insufficient credits|not enough credits/i.test(err.message)) {
+          return fail(`VIVID API error ${err.status}: ${err.message}\n${outOfCreditsHint(err.details)}`);
+        }
+        const hint = err.status === 401 ? ' (check VIVID_API_KEY — generate one in Settings on vividai.tv)' : '';
         return fail(`VIVID API error ${err.status}: ${err.message}${hint}`);
       }
       return fail(err instanceof Error ? err.message : String(err));
@@ -241,7 +273,56 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   }, guarded(async () => {
     const { data } = await client.get<PublicUser>('/api/me');
-    return json({ id: data.id, email: data.email, name: data.name, plan: data.plan, credits: data.credits, lang: data.lang });
+    // Best effort: an older API has no /billing/topup, whoami must still answer.
+    const auto = (await client.get<TopupInfo>('/api/billing/topup').then((r) => r.data).catch(() => undefined))?.autoTopup;
+    return json({
+      id: data.id, email: data.email, name: data.name, plan: data.plan, credits: data.credits, lang: data.lang,
+      ...(auto ? { autoTopup: auto.enabled ? { enabled: true, threshold: auto.threshold } : { enabled: false } } : {}),
+    });
+  }));
+
+  server.registerTool('vivid_buy_credits', {
+    title: 'Top up credits',
+    description: 'Get the link where the user buys a credit pack (500 / 1,500 / 5,000 credits) and can turn on auto top-up. Use it when a call fails for lack of credits or before a big batch that the balance (vivid_whoami) will not cover. This tool never charges anything: the user picks the pack and pays in their browser. Show them the link, wait for them to confirm, then continue.',
+    inputSchema: {
+      creditsNeeded: z.number().positive().optional().describe('Credits missing for the work you are doing; the page preselects the smallest pack that covers it.'),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  }, guarded(async ({ creditsNeeded }) => {
+    const base = client.apiUrl.includes('vividoai') ? 'https://vividai.tv' : client.apiUrl;
+    const url = `${base}/billing/topup${creditsNeeded ? `?need=${Math.ceil(creditsNeeded)}` : ''}`;
+    const fetched = await client.get<TopupInfo>('/api/billing/topup').then((r) => r.data).catch(() => undefined);
+    const topup = Array.isArray(fetched?.packs) && fetched?.autoTopup ? fetched : undefined;
+    const packs = topup?.packs.map((p) => ({
+      credits: p.credits,
+      price: `${topup.currency === 'usd' ? '$' : '€'}${(p.priceCents / 100).toFixed(2)}`,
+    }));
+
+    // Clients that support URL elicitation show the link as a confirmation prompt.
+    let opened: string | undefined;
+    if (server.server.getClientCapabilities()?.elicitation?.url) {
+      try {
+        const r = await server.server.elicitInput({
+          mode: 'url',
+          elicitationId: crypto.randomUUID(),
+          url,
+          message: creditsNeeded
+            ? `VIVID needs about ${Math.ceil(creditsNeeded)} more credits to finish. Open the page to choose a pack and pay.`
+            : 'Open VIVID to choose a credit pack and pay.',
+        });
+        opened = r.action;
+      } catch { /* fall back to the plain link */ }
+    }
+
+    return json({
+      url,
+      ...(packs ? { packs } : {}),
+      ...(topup ? { autoTopup: { enabled: topup.autoTopup.enabled, threshold: topup.autoTopup.threshold } } : {}),
+      ...(opened ? { userAction: opened } : {}),
+      next: opened === 'accept'
+        ? 'The user opened the page. When they say the payment is done, retry the call that failed.'
+        : 'Show the user this link. When they say the payment is done, retry the call that failed.',
+    });
   }));
 
   server.registerTool('vivid_usage', {
