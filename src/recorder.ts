@@ -87,6 +87,14 @@ export function siteFor(client: VividClient): string {
   return client.apiUrl.includes('vividoai') ? 'https://vividai.tv' : client.apiUrl;
 }
 
+/** vividai.tv, its subdomains (stage.…) and the site the client's API URL maps to. */
+export function isVividOrigin(site: string, client: VividClient): boolean {
+  try {
+    const { hostname, origin } = new URL(site);
+    return hostname === 'vividai.tv' || hostname.endsWith('.vividai.tv') || origin === new URL(siteFor(client)).origin;
+  } catch { return false; }
+}
+
 async function loadPlaywright(): Promise<PW> {
   try {
     return await import('playwright-core');
@@ -220,8 +228,14 @@ export async function recordUi(client: VividClient, opts: RecordOptions): Promis
   const pw = await loadPlaywright();
 
   // Session first: if the key is wrong we fail before opening a browser.
+  // Only VIVID's own origins get it — seeding a third-party site's localStorage
+  // would hand that site a live VIVID session.
   let session: SessionData | null = null;
-  if (opts.login !== false) {
+  const vividSite = isVividOrigin(site, client);
+  if (opts.login !== false && !vividSite) {
+    warnings.push(`login skipped: ${new URL(site).origin} is not a VIVID site, so no VIVID session was given to it.`);
+  }
+  if (opts.login !== false && vividSite) {
     const { data } = await client.post<SessionData>('/api/me/session');
     session = data;
   }
