@@ -41,13 +41,13 @@ If neither option is available, tell the user they need either the VIVID connect
 Most tools spend the user's VIVID credits. These rules apply to every workflow:
 
 1. Call `vivid_whoami` once per session: plan and credit balance.
-2. Read prices from the tools (`vivid_list_models`, `vivid_list_voices`, `vivid_list_music_providers`, `vivid_product_sheet` without `create`), never from memory.
+2. Read prices from the tools (`vivid_list_models`, `vivid_list_voices`, `vivid_list_music_providers`, `vivid_product_sheet`), never from memory.
 3. Announce the total cost of a paid step and wait for a clear yes before the first paid call. Video always needs a yes; a single cheap image may follow directly from an explicit "generate it".
 4. Never pick a model slug, voice or duration you have not seen in a listing.
 5. When a call fails, report the error text as-is. Retry once at most, then propose an alternative (another model, a shorter duration).
-6. Out of credits (the error says so and carries a top-up link): show the link — or get one from `vivid_buy_credits` with the missing credits — and wait for the user to say they paid, then retry the same call; finished jobs are kept. Never ask for card details: the user pays in the browser. If the error says auto top-up just charged, retry right away.
+6. Out of credits: tell the user and follow what the error message says; finished jobs are kept, so the same call can be retried once the balance has changed. Never ask for card details. If the error says auto top-up just charged, retry right away.
 
-Free tools: `whoami`, `usage`, `buy_credits` (returns a link, charges nothing), all `list_*`, `get_*`, `job_status`, `render_status`, `music_status`, `transcribe`, `analyze_audio`, `product_sheet` without `create`, `upload_file`, `share_asset`, `download_asset`, `create_editor_project`, `edit_timeline`, `render_project`, `record_ui`.
+Free tools: `whoami`, `usage`, all `list_*`, `get_*`, `job_status`, `render_status`, `music_status`, `transcribe`, `analyze_audio`, `product_sheet`, `upload_file`, `share_asset`, `download_asset`, `create_editor_project`, `edit_timeline`, `render_project`, `record_ui`.
 Show credits rounded to two decimals. `analyze_product` is not free: 10 credits.
 
 ## 3. Pick the workflow
@@ -56,7 +56,7 @@ Read the reference file for the area before acting — each holds the steps, pro
 
 | The user wants… | Read | Main tools |
 |---|---|---|
-| Product photos, packshots, lifestyle scenes, ads stills, the same product or person across shots, a product reference sheet, a local fix on an image, a QC check against the real SKU | [references/images.md](references/images.md) | `generate_image`, `list_references`, `analyze_product`, `create_testimonial`, `product_sheet`, `retouch`, `compare_product` |
+| Product photos, packshots, lifestyle scenes, ads stills, the same product or person across shots, a product reference sheet, a local fix on an image, a QC check against the real SKU | [references/images.md](references/images.md) | `generate_image`, `list_references`, `analyze_product`, `create_testimonial`, `product_sheet`, `create_product_sheet`, `retouch`, `compare_product` |
 | A clip, reel, UGC shot or animated product photo | [references/video.md](references/video.md) | `list_models`, `generate_video`, `job_status` |
 | Voiceover, music, transcription, subtitles, BPM / beat analysis | [references/audio.md](references/audio.md) | `generate_voice`, `generate_music`, `transcribe`, `analyze_audio` |
 | A finished edit: cut clips to music, add text, captions, transitions, effects, reframe 16:9 ↔ 9:16, export MP4 | [references/editing.md](references/editing.md) | `create_editor_project`, `edit_timeline`, `render_project` |

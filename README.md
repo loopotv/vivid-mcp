@@ -27,7 +27,8 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_transcribe` | Speech-to-text (Deepgram Nova-3, free): per-word timestamps, readable cues, SRT/VTT export — from an asset, URL or local file |
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
 | `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |
-| `vivid_product_sheet` | Reference sheet of a saved product: front, two angles and worn, each checked against the real photo (one free redo, refund if it still fails) — 13 credits, first one free on the free plan; without `create` just reads it |
+| `vivid_product_sheet` | Reads the reference sheet of a saved product and the price of a new one (free) |
+| `vivid_create_product_sheet` | Makes the reference sheet: front, two angles and worn, each checked against the real photo (one free redo, refund if it still fails) — 13 credits, first one free on the free plan |
 | `vivid_generate_voice` | Text-to-speech: Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, emotions, and voices the account holder saved in the VIVID web app after confirming they own the voice), OmniVoice voice design, Deepgram. It does not clone a voice from an audio file or URL |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
@@ -43,7 +44,8 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | | How | Needs Node? | Local-only tools (`vivid_download_asset`, `vivid_record_ui`, local paths) |
 |---|---|---|---|
 | **Remote** | `https://mcp.vividai.tv/mcp` + `Authorization: Bearer vk_…` | no | no |
-| **Connector (ChatGPT, Claude.ai)** | `https://mcp.vividai.tv/mcp` with OAuth — no key to paste | no | no |
+| **Connector (Claude.ai)** | `https://mcp.vividai.tv/mcp` with OAuth — no key to paste | no | no |
+| **Connector (ChatGPT)** | `https://mcp.vividai.tv/chatgpt` with OAuth — no key to paste | no | no |
 | **Claude Code plugin** | `/plugin install vivid@vivid` — OAuth, plus the VIVID skills | no | no |
 | **Claude Desktop extension** | download [`vivid-mcp.mcpb`](https://vividai.tv/downloads/vivid-mcp.mcpb), double-click, paste the key | no (bundled runtime) | yes |
 | **Local (npx)** | `npx -y vivid-mcp` with `VIVID_API_KEY` | Node.js 20+ | yes |
@@ -67,7 +69,9 @@ claude mcp add --transport http vivid https://mcp.vividai.tv/mcp --header "Autho
 
 ### Connectors: ChatGPT, Claude.ai (OAuth)
 
-Clients that cannot send a header authenticate with OAuth 2.1 instead. Add a connector with the URL `https://mcp.vividai.tv/mcp` and pick **OAuth** (ChatGPT → Settings → Connectors → Create; Claude.ai → Settings → Connectors → Add custom connector). The client discovers `/.well-known/oauth-protected-resource`, registers itself (dynamic client registration) and sends you to `vividai.tv/oauth/consent`, where you sign in and click **Authorize**. Each connector gets its own credential (`vc_…`, never your API key) that acts on your assets and credits but cannot change the password, rotate the API key or delete the account; revoke it any time from **Settings → Connected apps**.
+Clients that cannot send a header authenticate with OAuth 2.1 instead. Add a connector with the URL `https://mcp.vividai.tv/mcp` (Claude.ai → Settings → Connectors → Add custom connector) or `https://mcp.vividai.tv/chatgpt` (ChatGPT → Settings → Connectors → Create) and pick **OAuth**. The client discovers `/.well-known/oauth-protected-resource`, registers itself (dynamic client registration) and sends you to `vividai.tv/oauth/consent`, where you sign in and click **Authorize**. Each connector gets its own credential (`vc_…`, never your API key) that acts on your assets and credits but cannot change the password, rotate the API key or delete the account; revoke it any time from **Settings → Connected apps**.
+
+`/chatgpt` serves the same tools under OpenAI's plugin guidelines: no `vivid_buy_credits` (an out-of-credits error points to the plans page instead of a checkout), no `vivid_chat`, no photos or recordings of a real person as inputs (`vivid_create_testimonial` takes `attributes` only, `vivid_generate_image` has no `modelImageUrls`, `vivid_generate_video` takes only audio made by `vivid_generate_voice` / `vivid_generate_music`).
 
 ### Claude Code plugin (OAuth + skills)
 

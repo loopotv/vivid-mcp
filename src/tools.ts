@@ -114,6 +114,21 @@ export interface LocalIo {
   openInBrowser(url: string): boolean;
 }
 
+/**
+ * Which directory the server is listed in. `openai` is the ChatGPT connector
+ * (mcp.vividai.tv/chatgpt): OpenAI's plugin guidelines forbid selling digital
+ * goods or linking to checkout, pass-through LLM chat, and taking media of a
+ * real person whose consent is not recorded elsewhere — so that profile has no
+ * vivid_buy_credits / vivid_chat, no person photos or foreign audio as inputs,
+ * and a neutral out-of-credits message.
+ */
+export type ToolProfile = 'default' | 'openai';
+
+export interface ToolOptions { profile?: ToolProfile }
+
+/** Informational plans page (no checkout) for the openai profile. */
+const PLANS_URL = 'https://vividai.tv/pricing';
+
 /** GET /api/billing/topup — the subset the MCP reads. */
 interface TopupInfo {
   packs: Array<{ id: string; credits: number; priceCents: number }>;
@@ -140,7 +155,10 @@ const DEFAULT_TOPUP_URL = 'https://vividai.tv/billing/topup';
  * vivid-workers). The agent can never pay: it shows the link, the user
  * confirms and pays in the browser, then the agent retries the same call.
  */
-export function outOfCreditsHint(details?: Record<string, unknown>): string {
+export function outOfCreditsHint(details?: Record<string, unknown>, profile: ToolProfile = 'default'): string {
+  if (profile === 'openai') {
+    return `The account does not have enough VIVID credits for this request. Tell the user; credits and plans are managed in their VIVID account (plans: ${PLANS_URL}). Do not retry until they say the balance has changed.`;
+  }
   const url = typeof details?.topupUrl === 'string' ? details.topupUrl : DEFAULT_TOPUP_URL;
   switch (details?.autoTopup) {
     case 'charged':
@@ -158,21 +176,37 @@ export function outOfCreditsHint(details?: Record<string, unknown>): string {
 }
 
 /** Wrap a tool handler so API errors become readable tool errors, not crashes. */
-function guarded<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
+function guarded<A>(
+  fn: (args: A) => Promise<CallToolResult>,
+  ctx: { profile: ToolProfile; local: boolean } = { profile: 'default', local: true },
+): (args: A) => Promise<CallToolResult> {
   return async (args) => {
     try {
       return await fn(args);
     } catch (err) {
       if (err instanceof VividApiError) {
         if (err.status === 402 || /crediti insufficienti|insufficient credits|not enough credits/i.test(err.message)) {
-          return fail(`VIVID API error ${err.status}: ${err.message}\n${outOfCreditsHint(err.details)}`);
+          return fail(`VIVID API error ${err.status}: ${err.message}\n${outOfCreditsHint(err.details, ctx.profile)}`);
         }
-        const hint = err.status === 401 ? ' (check VIVID_API_KEY — generate one in Settings on vividai.tv)' : '';
+        const hint = err.status !== 401 ? ''
+          : ctx.local ? ' (check VIVID_API_KEY — generate one in Settings on vividai.tv)'
+          : ' (the VIVID connection is no longer valid — ask the user to reconnect the VIVID app)';
         return fail(`VIVID API error ${err.status}: ${err.message}${hint}`);
       }
       return fail(err instanceof Error ? err.message : String(err));
     }
   };
+}
+
+/**
+ * A voice or track VIVID synthesised: TTS lands under tmp/tts/, music under
+ * tmp/music/ on the API host. User uploads go to tmp/audio/ and do not count.
+ */
+export function isVividGeneratedAudio(client: VividClient, url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.origin === new URL(client.apiUrl).origin && /^\/api\/temp\/tmp\/(tts|music)\/[^/]+$/.test(u.pathname);
+  } catch { return false; }
 }
 
 function summariseModel(m: AiModel) {
@@ -240,7 +274,12 @@ async function pollUntilDone(
 
 // ── registration ───────────────────────────────────────────────────────────
 
-export function registerTools(server: McpServer, client: VividClient, io?: LocalIo): void {
+export function registerTools(server: McpServer, client: VividClient, io?: LocalIo, opts: ToolOptions = {}): void {
+  const profile: ToolProfile = opts.profile ?? 'default';
+  const openai = profile === 'openai';
+  const g = <A>(fn: (args: A) => Promise<CallToolResult>) => guarded(fn, { profile, local: !!io });
+  /** Schema fields the openai profile does not take (see ToolProfile). */
+  const notOpenai = <T extends object>(shape: T): T => (openai ? ({} as T) : shape);
   const abs = (p?: string) => (p ? client.url(p) : undefined);
   /** Text for the local server vs the hosted connector (no filesystem there). */
   const L = (local: string, remote: string) => (io ? local : remote);
@@ -271,16 +310,17 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     description: 'Return the VIVID account linked to the API key: name, email, plan and remaining credits. Call this first to check the connection.',
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async () => {
+  }, g(async () => {
     const { data } = await client.get<PublicUser>('/api/me');
     // Best effort: an older API has no /billing/topup, whoami must still answer.
-    const auto = (await client.get<TopupInfo>('/api/billing/topup').then((r) => r.data).catch(() => undefined))?.autoTopup;
+    const auto = openai ? undefined : (await client.get<TopupInfo>('/api/billing/topup').then((r) => r.data).catch(() => undefined))?.autoTopup;
     return json({
       id: data.id, email: data.email, name: data.name, plan: data.plan, credits: data.credits, lang: data.lang,
       ...(auto ? { autoTopup: auto.enabled ? { enabled: true, threshold: auto.threshold } : { enabled: false } } : {}),
     });
   }));
 
+  if (!openai) {
   server.registerTool('vivid_buy_credits', {
     title: 'Top up credits',
     description: 'Get the link where the user buys a credit pack (500 / 1,500 / 5,000 credits) and can turn on auto top-up. Use it when a call fails for lack of credits or before a big batch that the balance (vivid_whoami) will not cover. This tool never charges anything: the user picks the pack and pays in their browser. Show them the link, wait for them to confirm, then continue.',
@@ -288,7 +328,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       creditsNeeded: z.number().positive().optional().describe('Credits missing for the work you are doing; the page preselects the smallest pack that covers it.'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  }, guarded(async ({ creditsNeeded }) => {
+  }, g(async ({ creditsNeeded }) => {
     const base = client.apiUrl.includes('vividoai') ? 'https://vividai.tv' : client.apiUrl;
     const url = `${base}/billing/topup${creditsNeeded ? `?need=${Math.ceil(creditsNeeded)}` : ''}`;
     const fetched = await client.get<TopupInfo>('/api/billing/topup').then((r) => r.data).catch(() => undefined);
@@ -324,32 +364,35 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
         : 'Show the user this link. When they say the payment is done, retry the call that failed.',
     });
   }));
+  }
 
   server.registerTool('vivid_usage', {
     title: 'Monthly usage',
     description: 'Monthly usage summary for the account (analyses, images, videos vs plan limits) and current credits.',
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async () => {
+  }, g(async () => {
     const { data } = await client.get<unknown>('/api/ai/usage');
     return json(data);
   }));
 
   server.registerTool('vivid_list_models', {
     title: 'List AI models',
-    description: 'List the AI models available to this account with pricing (credits) and capabilities. Use the returned `slug` as the `model` argument of vivid_generate_image / vivid_generate_video. Video models expose durations, resolutions, aspect ratios and what they support (startFrame, endFrame, reference, audio…).',
+    description: 'List the AI models available to this account with their cost in credits and capabilities. Use the returned `slug` as the `model` argument of vivid_generate_image / vivid_generate_video. Video models expose durations, resolutions, aspect ratios and what they support (startFrame, endFrame, reference, audio…).',
     inputSchema: {
-      type: z.enum(['image', 'video', 'llm']).optional().describe('Which catalog to list. Omit to get image + video; "llm" lists the chat models for vivid_chat.'),
+      type: (openai ? z.enum(['image', 'video']) : z.enum(['image', 'video', 'llm'])).optional()
+        .describe(openai ? 'Which catalog to list. Omit to get image + video.' : 'Which catalog to list. Omit to get image + video; "llm" lists the chat models for vivid_chat.'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async ({ type }) => {
-    if (type === 'llm') return json((await client.get<ChatModel[]>('/api/ai/chat/models')).data);
+  }, g(async ({ type }) => {
+    if (!openai && (type as string) === 'llm') return json((await client.get<ChatModel[]>('/api/ai/chat/models')).data);
     const list = async (t: 'image' | 'video') => (await client.get<AiModel[]>('/api/ai/models', { type: t })).data.map(summariseModel);
     if (type) return json(await list(type));
     const [image, video] = await Promise.all([list('image'), list('video')]);
     return json({ image, video });
   }));
 
+  if (!openai) {
   server.registerTool('vivid_chat', {
     title: 'Chat with an LLM',
     description: 'Run one chat completion on VIVID\'s LLM routing (Grok, Claude, OpenAI GPT via Kie.ai; Kimi via Wavespeed) paid in credits: provider price + 50%, billed per token (list with vivid_list_models type="llm", prices in credits per 1M tokens). Non-streaming. Pass the full conversation each call (system/user/assistant); image parts as {type:"image_url", image_url:{url}} on vision models. Returns the reply text, token usage and the credits charged.',
@@ -367,14 +410,15 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // spends credits, creates nothing
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const { data } = await client.post<ChatResult>('/api/ai/chat', { model: a.model, messages: a.messages, maxTokens: a.maxTokens, reasoningEffort: a.reasoningEffort });
     return json(data);
   }));
+  }
 
   server.registerTool('vivid_generate_image', {
     title: 'Generate image',
-    description: 'Generate one or more images on VIVID from a text prompt. Feature saved products and testimonials by NAME with `products` / `testimonials` (same as the app\'s #Product / @Testimonial mentions — list them with vivid_list_references), or pass ad-hoc reference image URLs (public URLs, e.g. from vivid_upload_file). Credits are charged per image according to the model. By default waits for completion and returns the asset ids and download URLs.',
+    description: 'Generate one or more images on VIVID from a text prompt. Feature saved products and testimonials by NAME with `products` / `testimonials` (same as the app\'s #Product / @Testimonial mentions — list them with vivid_list_references), or pass ad-hoc reference image URLs (public URLs, e.g. from vivid_upload_file).' + (openai ? ' People can only be featured as saved testimonials (created with consent in the VIVID web app, or designed from attributes with vivid_create_testimonial): this tool takes no photo of a person.' : '') + ' Credits are charged per image according to the model. By default waits for completion and returns the asset ids and download URLs.',
     inputSchema: {
       prompt: z.string().min(3).describe('What to generate. English works best.'),
       model: z.string().describe('Model slug from vivid_list_models (type=image), e.g. "nano-banana-2". For images that must carry legible text (claims, labels, posters, banners) prefer "ideogram-4.5".'),
@@ -386,15 +430,15 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       products: z.array(z.string()).optional().describe('Saved products to feature, by name (as in the app\'s "#" picker, e.g. "Borsa Nera") or asset id — see vivid_list_references. The product\'s look and geometry are locked like in the app.'),
       testimonials: z.array(z.string()).optional().describe('Saved testimonials / characters to cast, by name (as in the app\'s "@" picker, e.g. "Lina") or asset id — see vivid_list_references. Identity is locked.'),
       objectImageUrls: z.array(z.string().url()).optional().describe('Ad-hoc product reference image URLs (for products NOT saved in VIVID).'),
-      modelImageUrls: z.array(z.string().url()).optional().describe('Ad-hoc person reference image URLs (for people NOT saved as testimonials).'),
-      contextImageUrls: z.array(z.string().url()).optional().describe('Scene / context reference image URLs.'),
+      ...notOpenai({ modelImageUrls: z.array(z.string().url()).optional().describe('Ad-hoc person reference image URLs (for people NOT saved as testimonials).') }),
+      contextImageUrls: z.array(z.string().url()).optional().describe(openai ? 'Scene / context reference image URLs (places, props, lighting — not people).' : 'Scene / context reference image URLs.'),
       projectId: z.string().optional().describe('Attach the generation to a VIVID project.'),
       wait: z.boolean().default(true).describe('Wait for the generation to finish (polls up to timeoutSec).'),
       timeoutSec: z.number().int().min(10).max(600).default(WAIT(180)).describe(L('Seconds to wait before returning the job ids still running.', 'Seconds to wait before returning the job ids still running — hosted connectors time out after about a minute, keep it short. Never re-generate a job that is still processing: poll it with vivid_job_status.')),
     },
     // spends credits, adds new assets
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const [objectImageIds, modelImageIds] = await Promise.all([
       resolveReferences(client, 'product', a.products, a.projectId),
       resolveReferences(client, 'testimonial', a.testimonials, a.projectId),
@@ -438,7 +482,9 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       startFrameUrl: z.string().url().optional().describe('Image-to-video first frame.'),
       endFrameUrl: z.string().url().optional().describe('Last frame (needs startFrameUrl on most models).'),
       referenceImageUrls: z.array(z.string().url()).optional().describe('Subject / product reference images (models with "reference" support).'),
-      audioFileUrls: z.array(z.string().url()).optional().describe('Audio files: voice for talking-head models, or reference audio where supported.'),
+      audioFileUrls: z.array(z.string().url()).optional().describe(openai
+        ? 'Audio made by VIVID only — the URLs returned by vivid_generate_voice or vivid_generate_music: voice for talking-head models, or reference audio where supported. Uploaded or third-party recordings are refused, so no real person\'s voice can be put in a video.'
+        : 'Audio files: voice for talking-head models, or reference audio where supported.'),
       referenceVideoUrls: z.array(z.string().url()).max(3).optional().describe('Reference videos (MP4/MOV) to copy motion, rhythm or framing from. Seedance 2.0: max 3, 15 s in all. Seedance 2.5: max 3, 2–30 s each, 30 s in all, 480p or 720p only (never with start/end frame). Gemini Omni: 1 clip, first 10 s. Billed seconds: see vivid_list_models.'),
       mode: z.string().optional().describe('Model mode when applicable (e.g. "std" | "pro" for Kling O3).'),
       projectId: z.string().optional(),
@@ -447,7 +493,10 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // spends credits, adds a new asset
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
+    if (openai && a.audioFileUrls?.some((u) => !isVividGeneratedAudio(client, u))) {
+      return fail('audioFileUrls only takes audio made by VIVID (the url returned by vivid_generate_voice or vivid_generate_music). Recordings from elsewhere cannot be used: generate the voice-over with vivid_generate_voice first.');
+    }
     const { data } = await client.post<VideoGenResult>('/api/ai/generate-video', {
       prompt: a.prompt, model: a.model, requestedModel: a.model, duration: a.duration, aspectRatio: a.aspectRatio,
       resolution: a.resolution, generateAudio: a.generateAudio, mode: a.mode,
@@ -459,7 +508,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     if (data.requiresConfirmation) {
       return json({ requiresConfirmation: true, message: 'The backend asks for a confirmation (model incompatible with the inputs). Options:', confirmOptions: data.confirmOptions, routing: data.routing });
     }
-    const base = { jobId: data.jobId, taskId: data.taskId, creditsRemaining: data.creditsRemaining, warning: data.warning };
+    const base = { jobId: data.jobId, creditsRemaining: data.creditsRemaining, warning: data.warning };
     if (!a.wait) {
       return json({ ...base, status: 'processing', estimatedTime: data.estimatedTime, hint: `Poll with vivid_job_status jobId=${data.jobId}.` });
     }
@@ -479,9 +528,9 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     // NOT readOnly: on a processing video job this polls the provider, and the
     // server then records the finished result (status + asset). Nothing new is
     // created or removed — the generation was already paid for and produced —
-    // so it is non-destructive and idempotent.
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, guarded(async ({ jobId }) => {
+    // so it is non-destructive and idempotent. Closed world: one job of the account.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, g(async ({ jobId }) => {
     let { data: job } = await client.get<Job>(`/api/jobs/${jobId}`);
     let live: JobStatus | undefined;
     if (job.status === 'processing' || job.status === 'pending') {
@@ -515,7 +564,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       limit: z.number().int().min(1).max(100).default(20),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const { data, pagination } = await client.get<Job[]>('/api/jobs', {
       type: a.type, status: a.status, project_id: a.projectId, page: a.page, limit: a.limit,
     });
@@ -545,7 +594,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       limit: z.number().int().min(1).max(100).default(24),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const { data, pagination } = await client.get<Asset[]>('/api/assets', {
       type: a.type, category: a.category, favorite: a.favorite ? 'true' : undefined, project_id: a.projectId,
       page: a.page, limit: a.limit,
@@ -568,7 +617,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     description: 'Metadata for one asset (type, filename, favorite/public flags, share link if public, originating job).',
     inputSchema: { assetId: z.string() },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async ({ assetId }) => {
+  }, g(async ({ assetId }) => {
     const { data } = await client.get<Asset>(`/api/assets/${assetId}`);
     return json({
       ...data, favorite: !!data.is_favorite, public: !!data.is_public,
@@ -588,7 +637,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // writes to the local filesystem and can overwrite a file
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, guarded(async ({ assetId, outputDir, filename }) => {
+  }, g(async ({ assetId, outputDir, filename }) => {
     const { data: meta } = await client.get<Asset>(`/api/assets/${assetId}`);
     const { bytes, contentType } = await client.download(`/api/assets/${assetId}/download`);
     await io!.mkdir(outputDir);
@@ -602,15 +651,16 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_share_asset', {
     title: 'Share / unshare asset',
-    description: 'Make an asset public and get a shareable URL (no login required), or revoke sharing. Also toggles the favorite flag. The reply carries `disclosure.notice`: relay it to the user when they share or publish AI-generated content.',
+    description: 'Make an asset public and get a shareable URL (no login required), or revoke sharing — revoking breaks the link for everyone who has it. Also toggles the favorite flag. Only change sharing when the user asked to. The reply carries `disclosure.notice`: relay it to the user when they share or publish AI-generated content.',
     inputSchema: {
       assetId: z.string(),
       public: z.boolean().optional().describe('true = publish and return the public URL, false = unpublish.'),
       favorite: z.boolean().optional(),
     },
-    // publishes a link anyone can open, or revokes it — reversible
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, guarded(async ({ assetId, public: isPublic, favorite }) => {
+    // publishes a link anyone can open, or revokes it: access revocation counts
+    // as destructive (OpenAI guidelines), reversible or not
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, g(async ({ assetId, public: isPublic, favorite }) => {
     if (isPublic === undefined && favorite === undefined) return fail('Pass `public` and/or `favorite`.');
     const { data } = await client.patch<Asset>(`/api/assets/${assetId}`, {
       ...(isPublic === undefined ? {} : { is_public: isPublic }),
@@ -631,7 +681,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // adds a temporary file (expires after 7 days)
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async ({ source }) => {
+  }, g(async ({ source }) => {
     const data = await client.tempUpload(source);
     return json(data);
   }));
@@ -647,7 +697,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       query: z.string().optional().describe('Filter by name (substring, case-insensitive).'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const { data } = await client.get<MentionItem[]>('/api/assets/mentionable', { project_id: a.projectId });
     const q = a.query?.trim().toLowerCase();
     const matches = data
@@ -679,7 +729,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // free, but saves a new product on the account
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     let started: { jobId: string; status: string };
     if (a.jobId) {
       started = { jobId: a.jobId, status: 'processing' };
@@ -715,24 +765,27 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_create_testimonial', {
     title: 'Create a testimonial (AI model / persona)',
-    description: 'Create a reusable TESTIMONIAL on the account — a consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked). Two ways: `photos` = three photos of a REAL person (left profile, front, right profile) → composite identity. Requires `consent: true`: set it ONLY after the user has confirmed that the person pictured is them or has consented to being turned into a virtual presenter; the consent is recorded with time and IP, and photos with nudity or sexual content are refused; or `attributes` = design the person from scratch (gender, age, ethnicity required; optional bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
+    description: (openai
+      ? 'Create a reusable TESTIMONIAL on the account — a fictional, consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked), designed from scratch with `attributes`. This tool never takes photos of a real person: testimonials of real people are created only in the VIVID web app, where the person\'s consent is collected. `attributes`'
+      : 'Create a reusable TESTIMONIAL on the account — a consistent person you can cast by name in vivid_generate_image `testimonials` (identity locked). Two ways: `photos` = three photos of a REAL person (left profile, front, right profile) → composite identity. Requires `consent: true`: set it ONLY after the user has confirmed that the person pictured is them or has consented to being turned into a virtual presenter; the consent is recorded with time and IP, and photos with nudity or sexual content are refused; or `attributes` = design the person from scratch')
+      + ' (gender, age, ethnicity required; optional bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
     inputSchema: {
-      photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe(L('Local paths or URLs of the three views of a real person.', 'URLs of the three views of a real person.')),
+      ...notOpenai({ photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe(L('Local paths or URLs of the three views of a real person.', 'URLs of the three views of a real person.')) }),
       attributes: z.record(z.string(), z.string()).optional().describe('From-scratch persona attributes (gender, age, ethnicity + optional look fields).'),
-      consent: z.boolean().optional().describe('Required with `photos`: true only once the user has confirmed the person pictured is them or has given consent. Never assume it.'),
+      ...notOpenai({ consent: z.boolean().optional().describe('Required with `photos`: true only once the user has confirmed the person pictured is them or has given consent. Never assume it.') }),
       locale: z.enum(['it', 'en', 'es']).default('it'),
       projectId: z.string().optional(),
       wait: z.boolean().default(true),
       timeoutSec: z.number().int().min(30).max(900).default(WAIT(300)),
       jobId: z.string().optional().describe('Resume waiting on a testimonial that returned status "processing" (no new charge).'),
     },
-    // spends credits, saves a new testimonial
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+    // spends credits, saves a new testimonial; photo URLs make it open-world
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: !openai },
+  }, g(async (a) => {
     let jobId: string;
     if (a.jobId) {
       jobId = a.jobId;
-    } else if (a.photos) {
+    } else if (a.photos && !openai) {
       if (a.consent !== true) {
         throw new VividApiError('Creating a testimonial from photos of a real person needs consent: true. Ask the user to confirm that the person pictured is them or has consented; if they cannot, use `attributes` to design a person instead.', 400);
       }
@@ -779,7 +832,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     description: 'List the text-to-speech providers and preset voices available on VIVID (Deepgram Aura-2, MiniMax HD presets + voices the account holder saved in the VIVID web app, OmniVoice voice design, Gemini 3.1 Flash) with their credit cost. Use it before vivid_generate_voice.',
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async () => {
+  }, g(async () => {
     const { data } = await client.get<Record<string, unknown>>('/api/ai/tts-voices');
     // Clone-from-reference engines are not offered over MCP (see vivid_generate_voice)
     const providers = Array.isArray(data.providers) ? data.providers.filter((p: { id?: string }) => p.id !== 'omnivoice-clone') : data.providers;
@@ -800,8 +853,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       filename: z.string().optional(),
     },
     // spends credits, adds a new asset
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, g(async (a) => {
     const { data } = await client.post<{ url: string; provider: string; credits: number }>('/api/ai/tts-v2', {
       provider: a.provider, text: a.text, locale: a.locale, voice: a.voice, speed: a.speed, emotion: a.emotion,
     });
@@ -820,7 +873,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     description: 'List the account projects (brand containers) — use a project id to group generations.',
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async () => {
+  }, g(async () => {
     const { data } = await client.get<Array<Record<string, unknown>>>('/api/projects');
     return json(data.map((p) => ({ id: p.id, name: p.name, brandName: p.brand_name, status: p.status, createdAt: p.created_at })));
   }));
@@ -867,8 +920,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       filename: z.string().optional(),
     },
     // spends credits, adds a new asset
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, g(async (a) => {
     const { data } = await client.post<{ taskId?: string; url?: string }>('/api/ai/generate-music', {
       prompt: a.prompt, duration: a.durationSec, provider: a.provider, instrumental: a.instrumental, lyrics: a.lyrics, format: 'mp3', async: true,
     });
@@ -887,15 +940,15 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       filename: z.string().optional(),
     },
     // polls; on completion the server stores the file and charges the reserved price once
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, guarded(async (a) => finishMusic(a.taskId, a.waitSec, a.outputDir, a.filename)));
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, g(async (a) => finishMusic(a.taskId, a.waitSec, a.outputDir, a.filename)));
 
   server.registerTool('vivid_list_music_providers', {
     title: 'List music providers',
     description: 'Music generation providers with credits, capabilities (exact duration, vocals, max length) and whether each is configured on the server.',
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async () => {
+  }, g(async () => {
     const { data } = await client.get<Record<string, unknown>>('/api/ai/music-providers');
     return json(data);
   }));
@@ -914,7 +967,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // free; may upload the file and write a local subtitle file
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const body: Record<string, unknown> = { locale: a.language, format: a.format, granularity: a.granularity };
     if (/^[a-f0-9]{32}$/i.test(a.source)) body.assetId = a.source;
     else if (/^https?:\/\//i.test(a.source)) body.url = a.source;
@@ -958,7 +1011,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     },
     // spends credits, adds a new asset (the original is untouched)
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     // Hosted connector: the locate + edit steps often outlast its ~1 min cut,
     // so run it on the queue and wait ~40 s; the local server stays sync.
     const finishAsync = async (jobId: string) => {
@@ -994,7 +1047,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
 
   server.registerTool('vivid_compare_product', {
     title: 'Compare a render with the SKU reference (visual QC)',
-    description: 'Visual quality control: checks that the product in a generated/retouched image matches the real product photo (SKU card). Vision LLM compares shape, proportions, materials/finish, colours, stones/elements, logos, hardware — product only, background ignored. Returns match 0–1, verdict pass|review|fail, a list of differences with severity, a summary and a `fixPrompt` you can pass straight to vivid_retouch. 1 credit, ~15–25 s.',
+    description: 'Visual quality control: checks that the product in a generated/retouched image matches the real product photo (SKU card). Vision LLM compares shape, proportions, materials/finish, colours, stones/elements, logos, hardware — product only, background ignored. Returns match 0–1, verdict pass|review|fail, a list of differences with severity, a summary and a `fixPrompt` you can pass straight to vivid_retouch. 1 credit per call (a retry is charged again), ~15–25 s.',
     inputSchema: {
       candidate: z.string().min(1).describe(L('Image to check: asset id, URL or local path.', 'Image to check: asset id or URL.')),
       reference: z.string().min(1).describe(L('SKU / real product photo: asset id, URL or local path.', 'SKU / real product photo: asset id or URL.')),
@@ -1002,9 +1055,9 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       focus: z.string().max(300).optional().describe('Which object to compare when the candidate shows several, e.g. "the ring on the hand".'),
       language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the summary.'),
     },
-    // Not readOnly: the check costs 1 credit, so it changes the account balance.
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, guarded(async (a) => {
+    // Not readOnly and not idempotent: every check costs 1 credit.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, g(async (a) => {
     const [cand, ref] = await Promise.all([imageRef(a.candidate), imageRef(a.reference)]);
     const { data } = await client.post<Record<string, unknown>>('/api/ai/compare-product', {
       candidateAssetId: cand.assetId, candidateUrl: cand.url, referenceAssetId: ref.assetId, referenceUrl: ref.url,
@@ -1039,46 +1092,60 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     return json({ sheet: out, offer: s.offer, ...extra });
   };
 
-  server.registerTool('vivid_product_sheet', {
-    title: 'Product reference sheet (4 views + QC)',
-    description: 'The reference sheet of a saved product: Nano Banana 2.1 draws a 2×2 grid (front, two category-specific angles, worn/in use) from the product photos, then every panel is checked against the real photo with the same vision QC as vivid_compare_product; one failed check is regenerated for free, a second failure refunds everything. Without `create` it only returns the current sheet and what a new one would cost (free). With `create: true` it starts a sheet — 13 credits, or free for the first sheet of a free account — and waits up to `waitSec` (it takes 1–3 minutes); call again without `create` to poll. Angles the photos do not show are reconstructed: pass an extra photo of the side/back in `extraPhotos` for a faithful sheet. Returns the four panels and the grid with download links, the QC scores, or the failure message.',
-    inputSchema: {
-      product: z.string().min(1).describe('Saved product by name (as in vivid_list_references) or asset id.'),
-      create: z.boolean().default(false).describe('Start a new sheet (spends credits unless free). false = just read the latest one.'),
-      extraPhotos: z.array(z.string()).max(3).optional().describe('create only: more photos of the same product (side, back, detail) as saved products by name or image asset ids of the account.'),
-      language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the failure message.'),
-      waitSec: z.number().int().min(0).max(240).default(io ? 200 : 40).describe('How long to wait for a running sheet. Hosted connectors time out after about a minute, so keep it short there.'),
-      projectId: z.string().optional(),
-    },
-    // create: spends credits and adds assets; read-only otherwise
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
-    const productId = ASSET_ID.test(a.product) ? a.product : (await resolveReferences(client, 'product', [a.product], a.projectId))[0]!;
+  const productIdOf = async (product: string, projectId?: string) =>
+    ASSET_ID.test(product) ? product : (await resolveReferences(client, 'product', [product], projectId))[0]!;
+  /** Read the sheet, waiting up to waitSec while it is being made. */
+  const awaitSheet = async (productId: string, waitSec: number, extra: Record<string, unknown> = {}) => {
     const path = `/api/products/${productId}/sheet`;
-    let started: Record<string, unknown> | undefined;
-    if (a.create) {
-      const extras = a.extraPhotos?.length
-        ? await Promise.all(a.extraPhotos.map(async (p) => (ASSET_ID.test(p) ? p : (await resolveReferences(client, 'product', [p], a.projectId))[0]!)))
-        : undefined;
-      try {
-        const { data } = await client.post<{ sheetId: string; jobId: string; credits: number; free: boolean }>(path, { locale: a.language, extraAssetIds: extras });
-        started = { started: { credits: data.credits, free: data.free } };
-      } catch (err) {
-        // One sheet at a time per product: wait for the running one instead of failing.
-        if (!(err instanceof VividApiError && err.code === 'SHEET_IN_PROGRESS')) throw err;
-        started = { started: false, note: 'A sheet for this product was already being made: waiting for that one (nothing charged).' };
-      }
-    }
-    const deadline = Date.now() + a.waitSec * 1000;
+    const deadline = Date.now() + waitSec * 1000;
     let s = (await client.get<SheetState>(path)).data;
     while (s.sheet?.status === 'processing' && Date.now() < deadline) {
       await sleep(5000);
       s = (await client.get<SheetState>(path)).data;
     }
     const next = s.sheet?.status === 'processing'
-      ? { next: `Still working (step: ${s.sheet.step ?? 'reading'}). Call vivid_product_sheet with the same product and no create in a minute.` }
-      : !s.sheet ? { next: `No sheet yet. create: true starts one (${s.offer.free ? 'free' : `${s.offer.credits} credits`}).` } : {};
-    return sheetOut(s, { productAssetId: productId, ...started, ...next });
+      ? { next: `Still working (step: ${s.sheet.step ?? 'reading'}). Call vivid_product_sheet with the same product in a minute.` }
+      : !s.sheet ? { next: `No sheet yet. vivid_create_product_sheet starts one (${s.offer.free ? 'free' : `${s.offer.credits} credits`}).` } : {};
+    return sheetOut(s, { productAssetId: productId, ...extra, ...next });
+  };
+  const SHEET_ABOUT = 'The reference sheet of a saved product is a 2×2 grid (front, two category-specific angles, worn/in use) drawn by Nano Banana 2.1 from the product photos; every panel is checked against the real photo with the same vision QC as vivid_compare_product.';
+
+  server.registerTool('vivid_product_sheet', {
+    title: 'Read a product reference sheet',
+    description: `${SHEET_ABOUT} This tool only reads: it returns the current sheet (four panels and the grid with download links, the QC scores, or the failure message) and what a new one would cost, and waits up to \`waitSec\` while one is being made. Free. To make a new sheet use vivid_create_product_sheet.`,
+    inputSchema: {
+      product: z.string().min(1).describe('Saved product by name (as in vivid_list_references) or asset id.'),
+      waitSec: z.number().int().min(0).max(240).default(io ? 200 : 40).describe('How long to wait for a sheet that is being made. Hosted connectors time out after about a minute, so keep it short there.'),
+      projectId: z.string().optional(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  }, g(async (a) => awaitSheet(await productIdOf(a.product, a.projectId), a.waitSec)));
+
+  server.registerTool('vivid_create_product_sheet', {
+    title: 'Create a product reference sheet (4 views + QC)',
+    description: `${SHEET_ABOUT} Starts a new sheet: 13 credits, or free for the first sheet of a free account (vivid_product_sheet shows the price first, for free). One failed check is regenerated for free, a second failure refunds everything. Takes 1–3 minutes: waits up to \`waitSec\`, then poll with vivid_product_sheet. If a sheet for the product is already being made, it waits for that one and charges nothing. Angles the photos do not show are reconstructed: pass an extra photo of the side/back in \`extraPhotos\` for a faithful sheet.`,
+    inputSchema: {
+      product: z.string().min(1).describe('Saved product by name (as in vivid_list_references) or asset id.'),
+      extraPhotos: z.array(z.string()).max(3).optional().describe('More photos of the same product (side, back, detail) as saved products by name or image asset ids of the account.'),
+      language: z.enum(['it', 'en', 'es']).default('it').describe('Language of the failure message.'),
+      waitSec: z.number().int().min(0).max(240).default(io ? 200 : 40).describe('How long to wait for the sheet. Hosted connectors time out after about a minute, so keep it short there.'),
+      projectId: z.string().optional(),
+    },
+    // spends credits, adds the sheet's assets
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, g(async (a) => {
+    const productId = await productIdOf(a.product, a.projectId);
+    const extras = a.extraPhotos?.length ? await Promise.all(a.extraPhotos.map((p) => productIdOf(p, a.projectId))) : undefined;
+    let started: Record<string, unknown>;
+    try {
+      const { data } = await client.post<{ sheetId: string; jobId: string; credits: number; free: boolean }>(`/api/products/${productId}/sheet`, { locale: a.language, extraAssetIds: extras });
+      started = { started: { credits: data.credits, free: data.free } };
+    } catch (err) {
+      // One sheet at a time per product: wait for the running one instead of failing.
+      if (!(err instanceof VividApiError && err.code === 'SHEET_IN_PROGRESS')) throw err;
+      started = { started: false, note: 'A sheet for this product was already being made: waiting for that one (nothing charged).' };
+    }
+    return awaitSheet(productId, a.waitSec, started);
   }));
 
   // ── Video editor: projects + render queue ────────────────────────────────
@@ -1090,7 +1157,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       limit: z.number().int().min(1).max(100).default(30),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async ({ limit }) => {
+  }, g(async ({ limit }) => {
     const { data } = await client.get<Asset[]>('/api/assets', { type: 'script', limit });
     return json(data.map((a) => ({
       id: a.id, name: a.filename.replace(/\.json$/, ''), createdAt: a.created_at,
@@ -1118,7 +1185,16 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     height: z.number().int().positive().optional(),
     localId: z.string().optional().describe('Id to use inside the project (defaults to the asset id). Reference it in ADD_CLIP.assetId.'),
   });
-  const commandsSchema = z.array(z.object({ type: z.string(), payload: z.record(z.string(), z.unknown()) }).passthrough());
+  // The closed list of editor operations (vivid-editor-core AiCommand): no
+  // generic executor — an unknown type is refused by the schema itself.
+  const COMMAND_TYPES = [
+    'ADD_CLIP', 'UPDATE_CLIP', 'REMOVE_CLIP', 'SPLIT_CLIP', 'DUPLICATE_CLIP', 'DETACH_AUDIO', 'ADD_TRACK', 'CUT_TO_BEAT',
+    'SET_TRANSITION', 'SET_CLIP_ANIMATION', 'SET_CINEMATIC_LOOK', 'SET_CANVAS_PRESET', 'UPDATE_CANVAS_OBJECT',
+    'ADD_TEXT', 'UPDATE_TEXT', 'REMOVE_TEXT', 'SET_SUBTITLES',
+    'SET_ANIMATIONS', 'SET_OBJECT_ANIMATION', 'ADD_EFFECT', 'REMOVE_EFFECT', 'SET_EFFECT_KEYFRAMES', 'APPLY_EFFECT_RECIPE',
+    'SET_MASK', 'ADD_AUDIO_REACTIVE', 'SET_SPEED_RAMP',
+  ] as const;
+  const commandsSchema = z.array(z.object({ type: z.enum(COMMAND_TYPES), payload: z.record(z.string(), z.unknown()) }));
   // Commands that read the music's beat grid: CUT_TO_BEAT and the beat-flash recipe.
   const needsBeatAnalysis = (commands: Array<{ type: string; payload?: unknown }> | undefined) => !!commands?.some((c) =>
     c.type === 'CUT_TO_BEAT' || (c.type === 'APPLY_EFFECT_RECIPE' && (c.payload as { recipe?: string } | undefined)?.recipe === 'beat-flash'));
@@ -1135,7 +1211,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       maxSeconds: z.number().int().min(5).max(180).optional().describe('Seconds analysed from the start (default 90).'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const body: Record<string, unknown> = { mode: a.mode, bpmHint: a.bpmHint, minGapMs: a.minGapMs, sensitivity: a.sensitivity, maxSeconds: a.maxSeconds };
     if (/^[a-f0-9]{32}$/i.test(a.source)) body.assetId = a.source;
     else if (/^https?:\/\//i.test(a.source)) body.url = a.source;
@@ -1165,7 +1241,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       raw: z.boolean().default(false),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const { raw, editor } = await loadProject(client, a.projectAssetId);
     if (a.raw) return json(raw);
     return json(summarize(editor.store.getState(), { projectAssetId: a.projectAssetId, editUrl: editUrlFor(client, a.projectAssetId), missingAssets: editor.missingAssets, subtitles: subtitlesOf(editor) }));
@@ -1182,7 +1258,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     },
     // creates a new project
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const file = newProject(a.name, a.canvasPreset);
     const editor = openHeadlessProject(file, { resolveUrl: resolveAssetUrl(client) });
     const imported = await addMedia(editor, a.media);
@@ -1206,7 +1282,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     },
     // edits the project in place — commands can remove clips
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+  }, g(async (a) => {
     const { editor } = await loadProject(client, a.projectAssetId);
     const imported = await addMedia(editor, a.media);
     const audioAnalysis = needsBeatAnalysis(a.commands) ? await ensureBeatAnalysis(client, editor) : undefined;
@@ -1224,7 +1300,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
 
   server.registerTool('vivid_render_project', {
     title: 'Render editor project',
-    description: 'Queue a render (MP4 export) of a saved video-editor project. VIVID renders in the browser: the job returns an `openUrl` — open it (or pass openBrowser=true to open it automatically on this machine) and the editor renders, uploads the MP4 to the gallery and marks the job done. Poll with vivid_render_status. Requires being logged in on vividai.tv in that browser.',
+    description: 'Queue a render (MP4 export) of a saved video-editor project. VIVID renders in the browser: the job returns an `openUrl` — open it (or pass openBrowser=true to open it automatically on this machine) and the editor renders, uploads the MP4 to the gallery and marks the job done. Poll with vivid_render_status. Requires being logged in on vividai.tv in that browser, preferably on a computer: phone browsers may stop a long render when the tab goes to the background.',
     inputSchema: {
       projectAssetId: z.string().describe('Editor project id from vivid_list_editor_projects.'),
       name: z.string().optional().describe('File name for the rendered video (without extension).'),
@@ -1233,8 +1309,8 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       timeoutSec: z.number().int().min(30).max(1800).default(600),
     },
     // queues a render, adds a new asset
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, guarded(async (a) => {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, g(async (a) => {
     const { data: job } = await client.post<RenderJob>('/api/render-jobs', { projectAssetId: a.projectAssetId, name: a.name });
     const opened = a.openBrowser && io ? io.openInBrowser(job.openUrl) : false;
     if (!a.wait) {
@@ -1258,7 +1334,7 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     description: 'Status of a render job created with vivid_render_project: queued, rendering (with progress), completed (with the output asset and download URL) or failed.',
     inputSchema: { renderJobId: z.string() },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  }, guarded(async ({ renderJobId }) => {
+  }, g(async ({ renderJobId }) => {
     const { data: j } = await client.get<RenderJob>(`/api/render-jobs/${renderJobId}`);
     return json({ renderJobId: j.id, status: j.status, progress: j.progress, executor: j.executor, projectAssetId: j.projectAssetId,
       outputAssetId: j.outputAssetId, downloadUrl: await dl(j.downloadUrl ?? j.outputAssetId ?? undefined), error: j.error, openUrl: j.openUrl, createdAt: j.createdAt });

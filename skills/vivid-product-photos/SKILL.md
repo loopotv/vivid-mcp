@@ -19,7 +19,7 @@ Ask only for what is missing, in one message:
 
 ## Steps
 
-1. **Check the account.** Call `vivid_whoami` for the credit balance. If it is below ~20 credits, say so before generating and offer the top-up link from `vivid_buy_credits`.
+1. **Check the account.** Call `vivid_whoami` for the credit balance. If it is below ~20 credits, say so before generating. If a call fails for lack of credits, tell the user and follow what the error message says.
 2. **Reuse what is saved.** Call `vivid_list_references` (`type: "product"`). If the product is already saved, pass its **name** in `products` — VIVID locks its look and geometry, which is what keeps colours and shape faithful across shots.
 3. **Otherwise use the photo.** Upload it with `vivid_upload_file` and pass the returned URL in `objectImageUrls`. If the user wants the product saved for later reuse, run `vivid_analyze_product` instead: it saves the product by name and returns a clean e-commerce render.
 4. **Choose the model with `vivid_list_models`** (`type: "image"`). Never invent a slug. Read `creditsPerUse` and report the cost of the batch before generating. Prefer the model the user already used in this conversation.

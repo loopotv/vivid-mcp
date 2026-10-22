@@ -62,7 +62,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
+      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_product_sheet', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
       'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -233,7 +233,8 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_generate_video', arguments: { prompt: 'espresso cup, steam rising', model: 'seedance-2.5', duration: 5, resolution: '480p', generateAudio: false, referenceImageUrls: ['https://cdn/x.jpg'] } })));
     expect(calls[0].body).toMatchObject({ model: 'seedance-2.5', requestedModel: 'seedance-2.5', duration: 5, aspectRatio: '16:9', resolution: '480p', generateAudio: false, referenceImageUrls: ['https://cdn/x.jpg'], source: 'mcp' });
-    expect(out).toMatchObject({ jobId: 'v1', taskId: 't1', status: 'processing', creditsRemaining: 200, warning: 'frames folded' });
+    expect(out).toMatchObject({ jobId: 'v1', status: 'processing', creditsRemaining: 200, warning: 'frames folded' });
+    expect(out.taskId).toBeUndefined(); // provider ids stay on the server
   });
 
   it('vivid_generate_video forwards reference videos as videoReferences', async () => {
@@ -430,7 +431,7 @@ describe('vivid-mcp tools', () => {
       routes.set(`POST /api/products/${P}/sheet`, () => ({ status: 202, body: { success: true, data: { sheetId: 's1', jobId: 'j1', credits: 13, free: false } } }));
       routes.set(`GET /api/products/${P}/sheet`, () => ({ body: { success: true, data: { sheet: ready, offer: { credits: 13, free: false } } } }));
       const client = await connect();
-      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_product_sheet', arguments: { product: 'Anello Rubino', create: true, extraPhotos: ['e'.repeat(32)], language: 'en' } })));
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_create_product_sheet', arguments: { product: 'Anello Rubino', extraPhotos: ['e'.repeat(32)], language: 'en' } })));
       expect(calls.find((c) => c.method === 'POST' && c.path.endsWith('/sheet'))!.body).toEqual({ locale: 'en', extraAssetIds: ['e'.repeat(32)] });
       expect(out.started).toEqual({ credits: 13, free: false });
       expect(out.sheet.panels.front.downloadUrl).toBe(`https://api.test/s/${'1'.repeat(32)}?sig=x`);
@@ -443,7 +444,7 @@ describe('vivid-mcp tools', () => {
       routes.set(`POST /api/products/${P}/sheet`, () => ({ status: 409, body: { success: false, error: 'busy', code: 'SHEET_IN_PROGRESS' } }));
       routes.set(`GET /api/products/${P}/sheet`, () => ({ body: { success: true, data: { sheet: { ...ready, status: 'processing', step: 'checking' }, offer: { credits: 13, free: false } } } }));
       const client = await connect();
-      const r = await client.callTool({ name: 'vivid_product_sheet', arguments: { product: P, create: true, waitSec: 0 } });
+      const r = await client.callTool({ name: 'vivid_create_product_sheet', arguments: { product: P, waitSec: 0 } });
       expect(r.isError).toBeFalsy();
       const out = JSON.parse(textOf(r));
       expect(out.started).toBe(false);
@@ -504,15 +505,18 @@ describe('vivid-mcp tools', () => {
       expect(again.canvasPreset.id).toBe('square');
     });
 
-    it('vivid_edit_timeline dryRun reports errors for unknown clips without saving', async () => {
+    it('vivid_edit_timeline dryRun does not save, and an unknown command type is refused', async () => {
       wire();
       routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(savedProject), raw: true }));
       const client = await connect();
       await client.callTool({ name: 'vivid_create_editor_project', arguments: { name: 'Spot' } });
       calls.length = 0;
-      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, dryRun: true, commands: [{ type: 'REMOVE_CLIP', payload: { id: 'nope' } }, { type: 'NOPE', payload: {} }] } })));
+      const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, dryRun: true, commands: [{ type: 'REMOVE_CLIP', payload: { id: 'nope' } }] } })));
       expect(out.saved).toBe(false);
-      expect(out.errors.some((e: string) => /Unknown command type/.test(e))).toBe(true);
+      expect(calls.some((c) => c.path === '/api/ai/save-editor-project')).toBe(false);
+      // No generic executor: a command type outside the editor's list is refused by the schema.
+      const bad = await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [{ type: 'NOPE', payload: {} }] } });
+      expect(bad.isError).toBe(true);
       expect(calls.some((c) => c.path === '/api/ai/save-editor-project')).toBe(false);
     });
 
@@ -747,5 +751,83 @@ describe('analysisSecondsFor', () => {
       const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_list_assets', arguments: {} })));
       expect(out.assets[0].thumbUrl).toBe('https://api.test/api/assets/x1/thumb?exp=1&sig=2');
     });
+  });
+});
+
+/** The ChatGPT connector (mcp.vividai.tv/chatgpt): OpenAI plugin guidelines, audit 22/10/2026. */
+describe('openai profile', () => {
+  async function connectOpenai() {
+    const server = new McpServer({ name: 'test-openai', version: '0.0.0' });
+    registerTools(server, new VividClient({ apiKey: 'vivid_test', apiUrl: 'https://api.test', fetchImpl: fetchMock }), undefined, { profile: 'openai' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    await client.connect(clientTransport);
+    return client;
+  }
+  const toolsOf = async () => (await (await connectOpenai()).listTools()).tools;
+
+  it('sells nothing and relays no LLM chat', async () => {
+    const names = (await toolsOf()).map((t) => t.name);
+    expect(names).not.toContain('vivid_buy_credits');
+    expect(names).not.toContain('vivid_chat');
+    const all = JSON.stringify(await toolsOf());
+    expect(all).not.toMatch(/billing\/topup|top.?up|credit pack|buy_credits|Kie\.ai/i);
+  });
+
+  it('a 402 points to the plans page, with no checkout link and no retry loop', async () => {
+    routes.set('GET /api/me', () => ({ status: 402, body: { success: false, error: 'insufficient_credits', code: 'INSUFFICIENT_CREDITS', topupUrl: 'https://vividai.tv/billing/topup?need=260', autoTopup: 'off' } }));
+    const client = await connectOpenai();
+    const r = await client.callTool({ name: 'vivid_whoami', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).not.toContain('billing/topup');
+    expect(textOf(r)).toContain('https://vividai.tv/pricing');
+  });
+
+  it('whoami does not read or return the auto top-up settings', async () => {
+    routes.set('GET /api/me', () => ({ body: { success: true, data: { id: 'u1', email: 'a@b.c', name: 'A', plan: 'pro', credits: 10 } } }));
+    const client = await connectOpenai();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_whoami', arguments: {} })));
+    expect(out.autoTopup).toBeUndefined();
+    expect(calls.some((c) => c.path === '/api/billing/topup')).toBe(false);
+  });
+
+  it('takes no photo of a real person: no testimonial photos, no ad-hoc person references', async () => {
+    const tools = await toolsOf();
+    const props = (name: string) => Object.keys((tools.find((t) => t.name === name)!.inputSchema as { properties: object }).properties);
+    expect(props('vivid_create_testimonial')).not.toContain('photos');
+    expect(props('vivid_create_testimonial')).not.toContain('consent');
+    expect(props('vivid_create_testimonial')).toContain('attributes');
+    expect(props('vivid_generate_image')).not.toContain('modelImageUrls');
+  });
+
+  it('video audio must be a voice or track VIVID generated', async () => {
+    routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', creditsRemaining: 1 } } }));
+    const client = await connectOpenai();
+    const base = { prompt: 'presenter talks to camera', model: 'infinitalk', duration: 5, startFrameUrl: 'https://cdn/p.jpg' };
+    const refused = await client.callTool({ name: 'vivid_generate_video', arguments: { ...base, audioFileUrls: ['https://api.test/api/temp/tmp/audio/123_x.mp3'] } });
+    expect(refused.isError).toBe(true);
+    expect(calls.some((c) => c.path === '/api/ai/generate-video')).toBe(false);
+    const ok = await client.callTool({ name: 'vivid_generate_video', arguments: { ...base, audioFileUrls: ['https://api.test/api/temp/tmp/tts/123_minimax_ab.mp3'] } });
+    expect(ok.isError).toBeFalsy();
+    expect(calls.some((c) => c.path === '/api/ai/generate-video')).toBe(true);
+  });
+
+  it('every tool carries the three hints as booleans, and they follow the guidelines', async () => {
+    const tools = await toolsOf();
+    for (const t of tools) {
+      for (const k of ['readOnlyHint', 'destructiveHint', 'openWorldHint'] as const) {
+        expect(typeof t.annotations?.[k], `${t.name}.${k}`).toBe('boolean');
+      }
+      if (t.annotations?.readOnlyHint) expect(t.annotations.destructiveHint, t.name).toBe(false);
+    }
+    const a = (name: string) => tools.find((t) => t.name === name)!.annotations!;
+    expect(a('vivid_share_asset').destructiveHint).toBe(true); // revokes access
+    expect(a('vivid_compare_product').idempotentHint).toBe(false); // charged per call
+    expect(a('vivid_product_sheet').readOnlyHint).toBe(true);
+    expect(a('vivid_create_product_sheet').readOnlyHint).toBe(false);
+    for (const n of ['vivid_job_status', 'vivid_music_status', 'vivid_product_sheet', 'vivid_create_product_sheet', 'vivid_render_project', 'vivid_generate_voice', 'vivid_generate_music', 'vivid_create_testimonial']) {
+      expect(a(n).openWorldHint, n).toBe(false);
+    }
   });
 });

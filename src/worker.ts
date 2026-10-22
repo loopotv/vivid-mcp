@@ -2,13 +2,16 @@ import { OAuthProvider, type AuthRequest, type OAuthHelpers } from '@cloudflare/
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { VividClient, DEFAULT_API_URL } from './client.js';
-import { registerTools } from './tools.js';
-import { VERSION, INSTRUCTIONS } from './meta.js';
+import { registerTools, type ToolProfile } from './tools.js';
+import { VERSION, INSTRUCTIONS, OPENAI_INSTRUCTIONS } from './meta.js';
 
 /**
  * vivid-mcp as a remote MCP server (Cloudflare Worker, Streamable HTTP).
  *
- *   POST https://mcp.vividai.tv/mcp
+ *   POST https://mcp.vividai.tv/mcp       — Claude.ai, Claude Code, Cursor, agents
+ *   POST https://mcp.vividai.tv/chatgpt   — the ChatGPT connector: same tools under
+ *        OpenAI's plugin guidelines (profile 'openai' in tools.ts: no credit
+ *        purchase, no LLM chat relay, no photos/recordings of real people)
  *
  * Two ways in:
  *
@@ -79,14 +82,17 @@ function randomId(bytes = 24): string {
   return btoa(String.fromCharCode(...buf)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/** MCP endpoint path → tool profile. */
+const ENDPOINTS: Record<string, ToolProfile> = { '/mcp': 'default', '/chatgpt': 'openai' };
+
 /** One MCP round-trip with the given credential. */
-async function handleMcp(request: Request, env: Env, apiKey: string): Promise<Response> {
+async function handleMcp(request: Request, env: Env, apiKey: string, profile: ToolProfile = 'default'): Promise<Response> {
   // Stateless: there is no server-initiated stream to subscribe to. Answer
   // 405 instead of holding an SSE connection open that will never emit.
   if (request.method === 'GET') return jsonResponse(405, { error: 'method not allowed', hint: 'POST JSON-RPC to /mcp' }, { Allow: 'POST, OPTIONS' });
   const client = new VividClient({ apiKey, apiUrl: env.VIVID_API_URL ?? DEFAULT_API_URL });
-  const server = new McpServer({ name: 'vivid-mcp', version: VERSION }, { instructions: INSTRUCTIONS });
-  registerTools(server, client); // no LocalIo: remote mode
+  const server = new McpServer({ name: 'vivid-mcp', version: VERSION }, { instructions: profile === 'openai' ? OPENAI_INSTRUCTIONS : INSTRUCTIONS });
+  registerTools(server, client, undefined, { profile }); // no LocalIo: remote mode
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
@@ -126,13 +132,13 @@ const userinfoHandler = {
 };
 
 // ── /mcp behind the provider: ctx.props holds the credential ────────────────
-const apiHandler = {
+const apiHandlerFor = (profile: ToolProfile) => ({
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const apiKey = (ctx.props as Props | undefined)?.apiKey;
     if (!apiKey) return jsonResponse(401, { error: 'grant has no credential — reconnect the app' });
-    return handleMcp(request, env, apiKey);
+    return handleMcp(request, env, apiKey, profile);
   },
-};
+});
 
 // ── Everything else: landing, /authorize, /authorize/callback ────────────────
 const defaultHandler = {
@@ -144,6 +150,7 @@ const defaultHandler = {
     if (url.pathname === '/' || url.pathname === '/health') {
       return jsonResponse(200, {
         name: 'vivid-mcp', version: VERSION, transport: 'streamable-http', endpoint: `${url.origin}/mcp`,
+        chatgptEndpoint: `${url.origin}/chatgpt`,
         auth: [
           'OAuth 2.1 (ChatGPT / Claude.ai connectors): discovery at /.well-known/oauth-protected-resource',
           'Authorization: Bearer <VIVID API key> (vividai.tv → Settings → API key)',
@@ -237,7 +244,7 @@ async function finishAuthorize(request: Request, env: Env): Promise<Response> {
 }
 
 const provider = new OAuthProvider<Env>({
-  apiHandlers: { '/mcp': apiHandler, '/userinfo': userinfoHandler },
+  apiHandlers: { '/mcp': apiHandlerFor('default'), '/chatgpt': apiHandlerFor('openai'), '/userinfo': userinfoHandler },
   defaultHandler,
   authorizeEndpoint: '/authorize',
   tokenEndpoint: '/token',
@@ -263,11 +270,13 @@ const provider = new OAuthProvider<Env>({
  */
 function normalizeDiscovery(request: Request): Request {
   const url = new URL(request.url);
-  const m = /^\/mcp\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration)$/.exec(url.pathname)
-    ?? /^\/\.well-known\/(openid-configuration)\/mcp$/.exec(url.pathname);
-  if (!m) return request;
-  const doc = m[1] === 'oauth-protected-resource' ? '/.well-known/oauth-protected-resource/mcp'
-    : m[1] === 'openid-configuration' ? '/.well-known/openid-configuration'
+  const under = /^\/(mcp|chatgpt)\/\.well-known\/(oauth-protected-resource|oauth-authorization-server|openid-configuration)$/.exec(url.pathname);
+  const oidc = /^\/\.well-known\/openid-configuration\/(mcp|chatgpt)$/.test(url.pathname);
+  if (!under && !oidc) return request;
+  const endpoint = under?.[1];
+  const kind = under ? under[2] : 'openid-configuration';
+  const doc = kind === 'oauth-protected-resource' ? `/.well-known/oauth-protected-resource/${endpoint}`
+    : kind === 'openid-configuration' ? '/.well-known/openid-configuration'
     : '/.well-known/oauth-authorization-server';
   url.pathname = doc;
   return new Request(url.toString(), request);
@@ -301,9 +310,10 @@ export default {
     const url = new URL(request.url);
     // `X-API-Key` (no Authorization header) bypasses the provider: it is the
     // documented header-based path and needs no OAuth machinery.
-    if (url.pathname === '/mcp' && !request.headers.get('authorization')) {
+    const profile = ENDPOINTS[url.pathname];
+    if (profile && !request.headers.get('authorization')) {
       const key = request.headers.get('x-api-key')?.trim();
-      if (key && isPrintableKey(key)) return handleMcp(request, env, key);
+      if (key && isPrintableKey(key)) return handleMcp(request, env, key, profile);
     }
     return provider.fetch(request, env, ctx);
   },

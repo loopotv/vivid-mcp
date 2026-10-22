@@ -31,7 +31,7 @@ When the product or the person comes from a reference, describe the **scene**, n
 
 `vivid_analyze_product {image | assetId, description?, locale}` → vision analysis (name, category, colours, material) plus a clean e-commerce render, saved to the account. 10 credits (refunded on failure), 30–90 s — announce it before the call. Report the assigned name; from then on pass it in `products`.
 
-Product reference sheet: `vivid_product_sheet {product}` returns the current sheet and the price of a new one (free call). With `create:true` it draws a 2×2 grid (front, two angles, worn/in use), checks every panel against the real photo and regenerates a failed one for free. Pass side/back photos in `extraPhotos` when the user has them — unseen angles are otherwise reconstructed.
+Product reference sheet: `vivid_product_sheet {product}` returns the current sheet and the price of a new one (free call). `vivid_create_product_sheet {product}` draws a 2×2 grid (front, two angles, worn/in use), checks every panel against the real photo and regenerates a failed one for free. Pass side/back photos in `extraPhotos` when the user has them — unseen angles are otherwise reconstructed.
 
 ## Recurring people (testimonials)
 
