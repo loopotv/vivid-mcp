@@ -1,0 +1,107 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "vivid",
+  "version": "1.1.0",
+  "description": "Product photos, short videos, voice-overs and music for e-commerce, made in your VIVID account.",
+  "author": {
+    "name": "Alessandro Brunello",
+    "url": "https://vividai.tv"
+  },
+  "homepage": "https://vividai.tv/mcp",
+  "repository": "https://github.com/loopotv/vivid-mcp",
+  "license": "MIT",
+  "keywords": [
+    "e-commerce",
+    "product photos",
+    "video",
+    "voice-over",
+    "music"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "VIVID",
+        "shortDescription": "Make product photos and video",
+        "longDescription": "VIVID is an AI content studio for e-commerce. From a prompt or a product photo it creates studio-quality product shots, short product videos, voice-overs and music, and keeps everything in one gallery you can reuse and share.\n\nConnect your VIVID account and work from the chat: generate an image or a video, feature a product you saved in VIVID so its look stays the same across shots, check how a job is going, browse or share what you have already made, and see your credit balance. Generations use the credits of your own VIVID account; each tool states its cost before a paid step.\n\nLimitations: people can appear only as personas designed from attributes or as testimonials the account holder created in the VIVID web app, where the person's consent is collected. The plugin never takes photos or voice recordings of a real person, and it does not sell or top up credits. Videos take one to five minutes and are followed with a status check. Rendering an edited timeline to MP4 runs in a browser signed in to vividai.tv.",
+        "developerName": "Alessandro Brunello",
+        "category": "Creativity",
+        "capabilities": [
+          "Generate product images",
+          "Generate product videos",
+          "Generate voice-overs and music",
+          "Browse and share your VIVID gallery"
+        ],
+        "websiteURL": "https://vividai.tv",
+        "supportURL": "https://vividai.tv/contact",
+        "privacyPolicyURL": "https://vividai.tv/privacy",
+        "termsOfServiceURL": "https://vividai.tv/terms",
+        "defaultPrompt": [
+          "Make a white-background packshot of my saved product, square format.",
+          "Turn my latest product image into a 5-second vertical video.",
+          "Show my VIVID credit balance and my latest images."
+        ],
+        "brandColor": "#111111",
+        "brandColorDark": "#E8E8E8",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png",
+        "logoDark": "./assets/logo-dark.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Account and credit balance",
+              "prompt": "Which VIVID account am I connected to, and how many credits do I have left?",
+              "tools_triggered": "vivid_whoami",
+              "expected_behavior": "Returns the account name, email, plan and remaining credits of the connected VIVID account."
+            },
+            {
+              "description": "Product photo of a saved product",
+              "prompt": "Make one square white-background packshot of my saved product \"Cognac Leather Structured Tote Bag\".",
+              "tools_triggered": "vivid_list_references, vivid_list_models, vivid_generate_image",
+              "expected_behavior": "Finds the saved product by name, picks an image model from the list, states the credit cost, generates the image with the product locked and returns the image with a download link. The new image appears in the VIVID gallery."
+            },
+            {
+              "description": "Product video, started and followed",
+              "prompt": "Turn my latest generated image into a 5-second 9:16 video: the bag rotates slowly on a pedestal, soft studio light.",
+              "tools_triggered": "vivid_list_assets, vivid_list_models, vivid_generate_video, vivid_job_status",
+              "expected_behavior": "Picks the latest image, chooses a video model that supports a start frame, 5 s and 9:16, states the credit cost and asks for confirmation, starts the job and polls it until the video is ready, then returns the download link."
+            },
+            {
+              "description": "Browse and share the gallery",
+              "prompt": "List my three most recent images and give me a public link to the newest one.",
+              "tools_triggered": "vivid_list_assets, vivid_share_asset",
+              "expected_behavior": "Lists the three newest images with their ids, makes the newest one public and returns its public URL together with the AI-content notice to show when publishing it."
+            },
+            {
+              "description": "Voice-over from a preset voice",
+              "prompt": "Record a short English voice-over with a warm female voice: \"Handmade in Italy, built to last.\"",
+              "tools_triggered": "vivid_list_voices, vivid_generate_voice",
+              "expected_behavior": "Lists the available preset voices, picks a warm female English preset, generates the voice-over and returns a playable MP3 link with the credits used."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Real person's photo as a model: the plugin takes no photos or recordings of real people, so it should decline and offer a persona designed from attributes or a testimonial created in the VIVID web app with consent.",
+              "prompt": "Here is a photo of a famous actor: make an ad of him holding my bag."
+            },
+            {
+              "description": "Buying credits: the plugin does not sell or top up credits, so it should not start any purchase; it may say that credits are managed in the user's VIVID account.",
+              "prompt": "Buy 5,000 VIVID credits with my saved card."
+            },
+            {
+              "description": "Unrelated request: nothing to do with images, video or audio content, so no VIVID tool should be called.",
+              "prompt": "What's the weather in Milan tomorrow?"
+            }
+          ]
+        },
+        "demo_recording_url": "https://vivid-chatgpt-demo.vividoai.workers.dev/",
+        "commerce": false,
+        "commerce_description": "The plugin does not sell anything. Generations use the credits already in the user's VIVID account; it shows no plans, packs or checkout."
+      },
+      "publication": {
+        "release_notes": "Follows the plugin guidelines on commerce and personal media: no credit purchase or checkout links, no LLM chat relay, no photos or voice recordings of real people as inputs (testimonials of real people are created only in the VIVID web app with consent; video audio must be a VIVID voice or track). Product sheet split into a read-only tool and a create tool; tool annotations reviewed; editor commands restricted to a fixed list."
+      }
+    }
+  }
+}

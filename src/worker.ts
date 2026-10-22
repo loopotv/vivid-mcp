@@ -58,7 +58,20 @@ interface Env {
 interface Props {
   apiKey: string;   // `vk_…` (direct) or `vc_…` (OAuth connection token)
   email?: string;
+  /** Tool profile of the grant: 'openai' for ChatGPT clients, set at authorization and on every token refresh. */
+  profile?: ToolProfile;
 }
+
+/**
+ * ChatGPT registers every connector (and the directory's scanner) with a
+ * redirect on chatgpt.com / openai.com. Those grants get the 'openai' profile
+ * on /mcp too: the URL registered in the OpenAI submission is /mcp, and a
+ * listed MCP server's URL cannot be changed from the update flow.
+ */
+const isOpenAiRedirect = (uri: string) => {
+  try { return /(^|\.)(chatgpt\.com|openai\.com)$/i.test(new URL(uri).hostname); } catch { return false; }
+};
+const profileForRedirects = (uris: string[] | undefined): ToolProfile => (uris?.some(isOpenAiRedirect) ? 'openai' : 'default');
 
 const TXN_TTL_SECONDS = 600;
 
@@ -132,11 +145,13 @@ const userinfoHandler = {
 };
 
 // ── /mcp behind the provider: ctx.props holds the credential ────────────────
-const apiHandlerFor = (profile: ToolProfile) => ({
+const apiHandlerFor = (endpointProfile: ToolProfile) => ({
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const apiKey = (ctx.props as Props | undefined)?.apiKey;
-    if (!apiKey) return jsonResponse(401, { error: 'grant has no credential — reconnect the app' });
-    return handleMcp(request, env, apiKey, profile);
+    const props = ctx.props as Props | undefined;
+    if (!props?.apiKey) return jsonResponse(401, { error: 'grant has no credential — reconnect the app' });
+    // /chatgpt is always 'openai'; /mcp follows the grant (ChatGPT clients → 'openai').
+    const profile = endpointProfile === 'openai' || props.profile === 'openai' ? 'openai' : 'default';
+    return handleMcp(request, env, props.apiKey, profile);
   },
 });
 
@@ -238,12 +253,14 @@ async function finishAuthorize(request: Request, env: Env): Promise<Response> {
     userId: body.data.user.id,
     metadata: { email: body.data.user.email, issuedAt: new Date().toISOString() },
     scope: authRequest.scope,
-    props: { apiKey: body.data.token, email: body.data.user.email } satisfies Props,
+    props: { apiKey: body.data.token, email: body.data.user.email, profile: profileForRedirects([authRequest.redirectUri]) } satisfies Props,
   });
   return Response.redirect(redirectTo, 302);
 }
 
-const provider = new OAuthProvider<Env>({
+/** Built on the first request: the token callback needs the KV binding. */
+let provider: OAuthProvider<Env> | undefined;
+const providerFor = (env: Env) => provider ??= new OAuthProvider<Env>({
   apiHandlers: { '/mcp': apiHandlerFor('default'), '/chatgpt': apiHandlerFor('openai'), '/userinfo': userinfoHandler },
   defaultHandler,
   authorizeEndpoint: '/authorize',
@@ -260,6 +277,15 @@ const provider = new OAuthProvider<Env>({
   resolveExternalToken: async ({ token }) => {
     if (!isPrintableKey(token) || !isVividKey(token)) return null;
     return { props: { apiKey: token } satisfies Props };
+  },
+  // Grants made before profiles existed learn theirs on the next refresh (access tokens last 1 h).
+  tokenExchangeCallback: async ({ clientId, props }) => {
+    const p = props as Props;
+    const client = await env.OAUTH_KV.get<{ redirectUris?: string[] }>(`client:${clientId}`, 'json').catch(() => null);
+    const profile = profileForRedirects(client?.redirectUris);
+    if (p.profile === profile) return;
+    const next = { ...p, profile } satisfies Props;
+    return { accessTokenProps: next, newProps: next };
   },
 });
 
@@ -315,6 +341,6 @@ export default {
       const key = request.headers.get('x-api-key')?.trim();
       if (key && isPrintableKey(key)) return handleMcp(request, env, key, profile);
     }
-    return provider.fetch(request, env, ctx);
+    return providerFor(env).fetch(request, env, ctx);
   },
 };

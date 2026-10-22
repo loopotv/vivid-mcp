@@ -22,7 +22,7 @@ Ask only for what is missing, in one message:
 1. **Check the account.** Call `vivid_whoami` for the credit balance. If it is below ~20 credits, say so before generating. If a call fails for lack of credits, tell the user and follow what the error message says.
 2. **Reuse what is saved.** Call `vivid_list_references` (`type: "product"`). If the product is already saved, pass its **name** in `products` — VIVID locks its look and geometry, which is what keeps colours and shape faithful across shots.
 3. **Otherwise use the photo.** Upload it with `vivid_upload_file` and pass the returned URL in `objectImageUrls`. If the user wants the product saved for later reuse, run `vivid_analyze_product` instead: it saves the product by name and returns a clean e-commerce render.
-4. **Choose the model with `vivid_list_models`** (`type: "image"`). Never invent a slug. Read `creditsPerUse` and report the cost of the batch before generating. Prefer the model the user already used in this conversation.
+4. **Choose the model with `vivid_list_models`** (`type: "image"`). Never invent a slug. Read `creditsPerImage` (or `creditRates` for models priced by quality) and report the cost of the batch before generating. Prefer the model the user already used in this conversation.
 5. **Generate** with `vivid_generate_image`: `prompt`, `model`, `aspectRatio`, `numImages`, and `products` or `objectImageUrls`. Write the prompt in English even when the conversation is in another language.
 6. **Deliver.** The call returns asset ids and download URLs. Show the images. If the user wants a link to send to someone, call `vivid_share_asset` with `public: true` and give the public URL.
 

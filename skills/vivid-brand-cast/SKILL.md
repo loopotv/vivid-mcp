@@ -8,7 +8,7 @@ description: Set up and reuse a brand's cast on VIVID — save a product from it
 VIVID keeps two kinds of reusable references on an account:
 
 - **Products** — saved from a real photo, with their colours, material and geometry locked.
-- **Testimonials** — a consistent person, either composed from three photos of a real, consenting person, or designed from attributes.
+- **Testimonials** — a consistent person: designed from attributes here in the chat, or — for a real person — created by the account holder in the VIVID web app, where that person's consent is collected.
 
 Once saved, both are used by **name**, which is what makes a series of images look like one campaign instead of eight strangers.
 
@@ -27,10 +27,11 @@ It costs 10 credits (refunded if the analysis fails) and counts against the plan
 
 ## Create a testimonial
 
-Two routes, both costing 50 credits — announce the cost and wait for a yes.
+It costs 50 credits — announce the cost and wait for a yes.
 
-- **From photos of a real person**: three views (left profile, front, right profile) via `vivid_create_testimonial` `photos`. Only with that person's explicit consent: ask the user to confirm it, then pass `consent: true` (VIVID records it with time and IP). Never set it on your own. If the user cannot confirm consent, stop and offer the attributes route instead. Photos with nudity or sexual content are refused.
-- **From attributes**: `vivid_create_testimonial` `attributes` with at least `gender`, `age`, `ethnicity` (values in English, e.g. "Female", "25-35", "Mediterranean"), plus any of hair, eyes, skin, expression, body type. VIVID assigns the name.
+Design the person from attributes: `vivid_create_testimonial` `attributes` with at least `gender`, `age`, `ethnicity` (values in English, e.g. "Female", "25-35", "Mediterranean"), plus any of hair, eyes, skin, expression, body type. VIVID assigns the name.
+
+Never send photos of a real person from the chat. If the user wants a real person (themselves, a model they hired) as a testimonial, tell them to create it in the VIVID web app, where that person's consent is collected; once saved it shows up in `vivid_list_references` and can be used by name here.
 
 ## Use the cast
 
