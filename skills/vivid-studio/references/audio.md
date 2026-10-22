@@ -8,12 +8,11 @@
 | Provider | Use it for | Cost |
 |---|---|---|
 | `gemini` (default) | Rich prosody, presets like Kore, Puck, Zephyr, Charon, Aoede | 1 cr / clip |
-| `minimax` | HD presets or the account's cloned voices, with `emotion` | 1 cr / clip |
-| `omnivoice-clone` | Clone a voice from a 3–10 s `referenceAudio` (+ `referenceText`) — a consistent presenter | 0.5 cr / clip |
+| `minimax` | HD presets or a voice the account holder saved in the VIVID web app (own voice, consent given there), with `emotion` | 1 cr / clip |
 | `omnivoice` | A voice designed from an English description in `voice` | 0.5 cr / clip |
 | `deepgram` | Aura-2 presets, quick drafts | free |
 
-Clone only a voice the user owns or has permission to use. Never speed up a recorded human voice to fit a cut — trim the script instead.
+The MCP tools cannot clone a voice from a recording. For a consistent presenter, use a preset or a voice the user saved in the VIVID web app, where they confirm the voice is their own. Never speed up a recorded human voice to fit a cut — trim the script instead.
 
 ## Music
 

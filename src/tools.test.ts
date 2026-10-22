@@ -554,11 +554,21 @@ describe('vivid-mcp tools', () => {
     expect(JSON.parse(textOf(r))).toMatchObject({ provider: 'minimax', credits: 1 });
   });
 
-  it('vivid_generate_voice requires a reference for omnivoice-clone', async () => {
+  it('vivid_generate_voice does not offer cloning from a reference recording', async () => {
     const client = await connect();
-    const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'omnivoice-clone' } });
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'vivid_generate_voice')!;
+    expect(JSON.stringify(tool.inputSchema)).not.toMatch(/omnivoice-clone|referenceAudio/);
+    const r = await client.callTool({ name: 'vivid_generate_voice', arguments: { text: 'Ciao', provider: 'omnivoice-clone', referenceAudio: 'https://x.test/a.mp3' } });
     expect(r.isError).toBe(true);
-    expect(textOf(r)).toContain('referenceAudio');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('vivid_list_voices hides the clone-from-reference engine', async () => {
+    routes.set('GET /api/ai/tts-voices', () => ({ body: { success: true, data: { providers: [{ id: 'gemini' }, { id: 'omnivoice-clone' }] } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_list_voices', arguments: {} });
+    expect(JSON.parse(textOf(r)).providers).toEqual([{ id: 'gemini' }]);
   });
 
   it('vivid_chat posts the conversation to /api/ai/chat and returns text + credits', async () => {

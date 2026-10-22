@@ -28,7 +28,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
 | `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |
 | `vivid_product_sheet` | Reference sheet of a saved product: front, two angles and worn, each checked against the real photo (one free redo, refund if it still fails) — 13 credits, first one free on the free plan; without `create` just reads it |
-| `vivid_generate_voice` | Text-to-speech: OmniVoice Voice Clone (3–10 s reference), Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, cloned voices, emotions), OmniVoice voice design, Deepgram |
+| `vivid_generate_voice` | Text-to-speech: Gemini 3.1 Flash presets, MiniMax Speech 2.8 HD (presets, emotions, and voices the account holder saved in the VIVID web app after confirming they own the voice), OmniVoice voice design, Deepgram. It does not clone a voice from an audio file or URL |
 | `vivid_list_projects` | Your projects |
 | `vivid_list_editor_projects` | Saved video-editor timelines |
 | `vivid_create_editor_project` · `vivid_get_editor_project` · `vivid_edit_timeline` | Build and edit video-editor timelines headless (clips, trims, speed, transitions, 16:9↔9:16, texts, masks, keyframes) with the same engine as the web editor — see *Timeline editing* |
