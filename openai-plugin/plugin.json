@@ -1,6 +1,6 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-  "name": "vivid",
+  "name": "app-6ab2ab8967dc81919a6812daf916b10d",
   "version": "1.1.0",
   "description": "Product photos, short videos, voice-overs and music for e-commerce, made in your VIVID account.",
   "author": {
