@@ -181,10 +181,12 @@ export class VividClient {
    * Upload a local file or a remote URL to VIVID's temporary bucket and get
    * back a public URL usable as start frame / reference / audio input.
    */
-  async tempUpload(source: string): Promise<{ url: string; key: string }> {
+  /** personCheck: the API refuses images showing a recognisable person (ChatGPT profile). */
+  async tempUpload(source: string, opts: { personCheck?: boolean } = {}): Promise<{ url: string; key: string }> {
     const { blob, filename, contentType } = await this.loadSource(source);
     const form = new FormData();
     form.append('file', blob, filename);
+    if (opts.personCheck) form.append('personCheck', '1');
     // Audio has its own endpoint (temp-upload only accepts images/videos).
     const endpoint = contentType.startsWith('audio/') ? '/api/ai/temp-audio-upload' : '/api/ai/temp-upload';
     const { data } = await this.post<{ url: string; key: string }>(endpoint, form);

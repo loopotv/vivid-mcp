@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "app-6ab2ab8967dc81919a6812daf916b10d",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Product photos, short videos, voice-overs and music for e-commerce, made in your VIVID account.",
   "author": {
     "name": "Alessandro Brunello",
@@ -100,7 +100,7 @@
         "commerce_description": "The plugin does not sell anything. Generations use the credits already in the user's VIVID account; it shows no plans, packs or checkout."
       },
       "publication": {
-        "release_notes": "Follows the plugin guidelines on commerce and personal media: no credit purchase or checkout links, no LLM chat relay, no photos or voice recordings of real people as inputs (testimonials of real people are created only in the VIVID web app with consent; video audio must be a VIVID voice or track). Product sheet split into a read-only tool and a create tool; tool annotations reviewed; editor commands restricted to a fixed list."
+        "release_notes": "Follows the plugin guidelines on commerce and personal media: no credit purchase or checkout links, no LLM chat relay, no photos or voice recordings of real people as inputs (testimonials of real people are created only in the VIVID web app with consent; video audio must be a VIVID voice or track). Product sheet split into a read-only tool and a create tool; tool annotations reviewed; editor commands restricted to a fixed list, each with a typed payload. Every image from outside the VIVID gallery (frames, references, product and scene photos, retouch sources, uploads) is checked server-side and refused when it shows a recognisable person; reference videos must come from the VIVID gallery. Replies leave out timestamps, internal paths and provider details. Out-of-credits messages link to an informational page with no checkout."
       }
     }
   }

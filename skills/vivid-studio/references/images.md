@@ -39,7 +39,7 @@ Product reference sheet: `vivid_product_sheet {product}` returns the current she
 `vivid_create_testimonial` costs 50 credits — announce it and wait for a yes. Two routes:
 
 - **From photos of a real person** (`photos` left/front/right): only with that person's explicit consent. Ask the user to confirm, then pass `consent:true`. Never set it yourself. If consent cannot be confirmed, offer the attributes route.
-- **From attributes** (`attributes` with at least `gender`, `age`, `ethnicity` in English, e.g. "Female", "25-35", "Mediterranean"; optional hair, eyes, skin, expression, body type). VIVID assigns the name.
+- **From attributes** (`attributes` with at least `gender` and `age` in English, optional `ethnicity`, e.g. "Female", "25-35", "Mediterranean"; optional hair, eyes, skin, expression, body type). VIVID assigns the name.
 
 Cast them with `testimonials:["Name"]` in `vivid_generate_image`. Never build a persona that imitates a public figure.
 

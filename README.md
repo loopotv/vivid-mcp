@@ -18,7 +18,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_download_asset` | Save an asset to a local folder |
 | `vivid_share_asset` | Publish an asset and get a share link, toggle favorite |
 | `vivid_upload_file` | Upload a local file or URL to use as reference / start frame / audio |
-| `vivid_list_references` | Saved products (Analizza prodotto) and testimonials / characters with names and ids — use the names in `vivid_generate_image` `products` / `testimonials`, like #Product / @Testimonial in the app |
+| `vivid_list_references` | Saved products (from product analysis) and testimonials / characters with names and ids — use the names in `vivid_generate_image` `products` / `testimonials`, like #Product / @Testimonial in the app |
 | `vivid_analyze_product` · `vivid_create_testimonial` | Save a product from a photo (free, plan quota) or create a reusable testimonial from three photos or attributes (50 credits) — both then usable by name |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
 | `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT, Kimi (Wavespeed)  |
@@ -71,7 +71,7 @@ claude mcp add --transport http vivid https://mcp.vividai.tv/mcp --header "Autho
 
 Clients that cannot send a header authenticate with OAuth 2.1 instead. Add a connector with the URL `https://mcp.vividai.tv/mcp` (Claude.ai → Settings → Connectors → Add custom connector) or `https://mcp.vividai.tv/chatgpt` (ChatGPT → Settings → Connectors → Create) and pick **OAuth**. The client discovers `/.well-known/oauth-protected-resource`, registers itself (dynamic client registration) and sends you to `vividai.tv/oauth/consent`, where you sign in and click **Authorize**. Each connector gets its own credential (`vc_…`, never your API key) that acts on your assets and credits but cannot change the password, rotate the API key or delete the account; revoke it any time from **Settings → Connected apps**.
 
-`/chatgpt` serves the same tools under OpenAI's plugin guidelines: no `vivid_buy_credits` (an out-of-credits error points to the plans page instead of a checkout), no `vivid_chat`, no photos or recordings of a real person as inputs (`vivid_create_testimonial` takes `attributes` only, `vivid_generate_image` has no `modelImageUrls`, `vivid_generate_video` takes only audio made by `vivid_generate_voice` / `vivid_generate_music`).
+`/chatgpt` serves the same tools under OpenAI's plugin guidelines: no `vivid_buy_credits` (an out-of-credits error points to the informational page [vividai.tv/credits](https://vividai.tv/credits), which has no checkout or upgrade button), no `vivid_chat`, no photos or recordings of a real person as inputs (`vivid_create_testimonial` takes `attributes` only, `vivid_generate_image` has no `modelImageUrls`, `vivid_generate_video` takes only audio made by `vivid_generate_voice` / `vivid_generate_music` and only gallery videos as references; every other image — frames, references, product and scene photos, retouch sources, `vivid_upload_file` — goes through the API's person check, which refuses a recognisable face). Replies leave out timestamps, raw project dumps, API paths and provider details.
 
 ### Claude Code plugin (OAuth + skills)
 

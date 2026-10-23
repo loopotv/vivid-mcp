@@ -29,7 +29,7 @@ It costs 10 credits (refunded if the analysis fails) and counts against the plan
 
 It costs 50 credits — announce the cost and wait for a yes.
 
-Design the person from attributes: `vivid_create_testimonial` `attributes` with at least `gender`, `age`, `ethnicity` (values in English, e.g. "Female", "25-35", "Mediterranean"), plus any of hair, eyes, skin, expression, body type. VIVID assigns the name.
+Design the person from attributes: `vivid_create_testimonial` `attributes` with at least `gender` and `age` (values in English, e.g. "Female", "25-35"), plus any of ethnicity, hair, eyes, skin, expression, body type. VIVID assigns the name.
 
 Never send photos of a real person from the chat. If the user wants a real person (themselves, a model they hired) as a testimonial, tell them to create it in the VIVID web app, where that person's consent is collected; once saved it shows up in `vivid_list_references` and can be used by name here.
 

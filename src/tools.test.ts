@@ -781,7 +781,8 @@ describe('openai profile', () => {
     const r = await client.callTool({ name: 'vivid_whoami', arguments: {} });
     expect(r.isError).toBe(true);
     expect(textOf(r)).not.toContain('billing/topup');
-    expect(textOf(r)).toContain('https://vividai.tv/pricing');
+    expect(textOf(r)).toContain('https://vividai.tv/credits');
+    expect(textOf(r)).not.toContain('/pricing');
   });
 
   it('whoami does not read or return the auto top-up settings', async () => {
@@ -804,13 +805,77 @@ describe('openai profile', () => {
   it('video audio must be a voice or track VIVID generated', async () => {
     routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', creditsRemaining: 1 } } }));
     const client = await connectOpenai();
-    const base = { prompt: 'presenter talks to camera', model: 'infinitalk', duration: 5, startFrameUrl: 'https://cdn/p.jpg' };
+    const base = { prompt: 'presenter talks to camera', model: 'infinitalk', duration: 5, startFrameUrl: 'https://api.test/api/assets/a1/download' };
     const refused = await client.callTool({ name: 'vivid_generate_video', arguments: { ...base, audioFileUrls: ['https://api.test/api/temp/tmp/audio/123_x.mp3'] } });
     expect(refused.isError).toBe(true);
     expect(calls.some((c) => c.path === '/api/ai/generate-video')).toBe(false);
     const ok = await client.callTool({ name: 'vivid_generate_video', arguments: { ...base, audioFileUrls: ['https://api.test/api/temp/tmp/tts/123_minimax_ab.mp3'] } });
     expect(ok.isError).toBeFalsy();
     expect(calls.some((c) => c.path === '/api/ai/generate-video')).toBe(true);
+  });
+
+  it('foreign images go through the person check before generation', async () => {
+    let personCheck: unknown;
+    routes.set('GET /p.jpg', () => ({ raw: true, body: 'jpegbytes' }));
+    routes.set('POST /api/ai/temp-upload', (init) => {
+      personCheck = (init.body as FormData).get('personCheck');
+      return { body: { success: true, data: { url: 'https://api.test/api/temp/tmp/checked/1_a.jpg', key: 'tmp/checked/1_a.jpg' } } };
+    });
+    routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', creditsRemaining: 1 } } }));
+    const client = await connectOpenai();
+    const r = await client.callTool({ name: 'vivid_generate_video', arguments: { prompt: 'the bag turns slowly', model: 'kling-o3', duration: 5, startFrameUrl: 'https://cdn.test/p.jpg', referenceImageUrls: ['https://api.test/api/assets/a1/download?sig=x'] } });
+    expect(r.isError).toBeFalsy();
+    expect(personCheck).toBe('1');
+    const body = calls.find((c) => c.path === '/api/ai/generate-video')!.body as Record<string, unknown>;
+    expect(body.startFrameUrl).toBe('https://api.test/api/temp/tmp/checked/1_a.jpg');
+    expect(body.referenceImageUrls).toEqual(['https://api.test/api/assets/a1/download?sig=x']);
+  });
+
+  it('a recognisable person stops the generation', async () => {
+    routes.set('GET /face.jpg', () => ({ raw: true, body: 'jpegbytes' }));
+    routes.set('POST /api/ai/temp-upload', () => ({ status: 422, body: { success: false, code: 'PERSON_NOT_ALLOWED', error: 'This image shows a recognisable person.' } }));
+    const client = await connectOpenai();
+    const r = await client.callTool({ name: 'vivid_generate_image', arguments: { prompt: 'same scene', model: 'nano-banana-2', contextImageUrls: ['https://cdn.test/face.jpg'] } });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toContain('recognisable person');
+    expect(calls.some((c) => c.path === '/api/ai/generate-image-v2')).toBe(false);
+  });
+
+  it('reference videos must come from the gallery', async () => {
+    const client = await connectOpenai();
+    const r = await client.callTool({ name: 'vivid_generate_video', arguments: { prompt: 'same moves', model: 'seedance-2.5', duration: 5, referenceVideoUrls: ['https://cdn.test/dance.mp4'] } });
+    expect(r.isError).toBe(true);
+    expect(calls.some((c) => c.path === '/api/ai/generate-video')).toBe(false);
+  });
+
+  it('replies carry no API paths, engine flags, raw dumps or timestamps', async () => {
+    routes.set('GET /api/ai/tts-voices', () => ({ body: { success: true, data: { deepgram: [], minimax: [], emotions: [], providers: [
+      { id: 'minimax', label: 'MiniMax', endpoint: '/api/ai/tts-v2', credits: 1, cloning: true, voices: 'minimax[] or a cloned voice (GET /api/ai/cloned-voices)' },
+      { id: 'omnivoice-clone', label: 'Clone', endpoint: '/api/ai/tts-v2', credits: 0.5, cloning: true },
+    ] } } }));
+    routes.set('GET /api/assets/a1', () => ({ body: { success: true, data: { id: 'a1', job_id: null, type: 'image', filename: 'x.png', is_favorite: 0, is_public: 0, created_at: '2026-10-01', r2_key: 'users/u1/x.png', user_id: 'u1' } } }));
+    const client = await connectOpenai();
+    const voices = textOf(await client.callTool({ name: 'vivid_list_voices', arguments: {} }));
+    expect(voices).not.toMatch(/\/api\/|clon/i);
+    const asset = JSON.parse(textOf(await client.callTool({ name: 'vivid_get_asset', arguments: { assetId: 'a1' } })));
+    expect(asset).not.toHaveProperty('r2_key');
+    expect(asset).not.toHaveProperty('user_id');
+    expect(asset).not.toHaveProperty('createdAt');
+    const tools = await toolsOf();
+    const props = (n: string) => Object.keys((tools.find((t) => t.name === n)!.inputSchema as { properties: object }).properties);
+    expect(props('vivid_get_editor_project')).not.toContain('raw');
+    expect(props('vivid_render_project')).not.toContain('openBrowser');
+    expect(props('vivid_generate_voice')).not.toContain('filename');
+  });
+
+  it('timeline commands are typed per operation', async () => {
+    const tools = await toolsOf();
+    const schema = JSON.stringify(tools.find((t) => t.name === 'vivid_edit_timeline')!.inputSchema);
+    expect(schema).toContain('splitAtMs');
+    const client = await connectOpenai();
+    const r = await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: 'p1', commands: [{ type: 'SPLIT_CLIP', payload: { anything: 1 } }] } });
+    expect(r.isError).toBe(true);
+    expect(calls.length).toBe(0);
   });
 
   it('every tool carries the three hints as booleans, and they follow the guidelines', async () => {
