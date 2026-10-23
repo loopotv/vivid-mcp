@@ -311,6 +311,11 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
   /** Hosted connectors (Claude.ai, ChatGPT) cut a tool call after about a
    *  minute: there the long-running tools wait ~40 s, then hand back an id. */
   const WAIT = (localSec: number) => (io ? localSec : 40);
+  /** How long a tool may still wait, in ms. Hosted: what is left of ~45 s
+   *  since the call started — the person check alone takes ~20 s per image
+   *  (in parallel), and 20 s + a 40 s wait ran past ChatGPT's cut (23/10). */
+  const remaining = (startedAt: number, sec: number) =>
+    io ? sec * 1000 : Math.max(3000, Math.min(sec * 1000, 45_000 - (Date.now() - startedAt)));
   /** openai profile: timestamps are dropped from replies (data minimisation). */
   const when = (v?: string | null) => (openai ? undefined : v);
 
@@ -475,6 +480,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     // spends credits, adds new assets
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, g(async (a) => {
+    const startedAt = Date.now();
     const [objectImageIds, modelImageIds, objectImageUrls, contextImageUrls] = await Promise.all([
       resolveReferences(client, 'product', a.products, a.projectId),
       resolveReferences(client, 'testimonial', a.testimonials, a.projectId),
@@ -495,7 +501,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     }
     const results = await Promise.all(jobIds.map((jobId) => pollUntilDone(
       async () => (await client.get<JobStatus>(`/api/ai/image-status/${jobId}`)).data,
-      a.timeoutSec * 1000, 3000,
+      remaining(startedAt, a.timeoutSec), 3000,
     )));
     const pending = results.some((r) => r.status !== 'completed' && r.status !== 'failed' && r.status !== 'cancelled');
     return json({
@@ -538,6 +544,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     if (openai && a.referenceVideoUrls?.some((u) => !/\/api\/assets\/[^/]+\/download$/.test(new URL(u).pathname) || !isVividMedia(client, u))) {
       return fail('referenceVideoUrls only takes videos from the VIVID gallery (the downloadUrl of a video in vivid_list_assets). Other videos cannot be used.');
     }
+    const startedAt = Date.now();
     const [startFrameUrl, endFrameUrl, referenceImageUrls] = await Promise.all([
       a.startFrameUrl ? vividImage(a.startFrameUrl) : undefined,
       a.endFrameUrl ? vividImage(a.endFrameUrl) : undefined,
@@ -559,7 +566,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     }
     const final = await pollUntilDone(
       async () => (await client.get<JobStatus>(`/api/ai/video-status/${data.jobId}`)).data,
-      a.timeoutSec * 1000, 10000,
+      remaining(startedAt, a.timeoutSec), 10000,
     );
     return json({ ...base, status: final.status, assetId: final.assetId, downloadUrl: await dl(final.downloadUrl ?? final.assetId), error: final.error });
   }));
@@ -780,6 +787,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     // free, but saves a new product on the account
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, g(async (a) => {
+    const startedAt = Date.now();
     let started: { jobId: string; status: string };
     if (a.jobId) {
       started = { jobId: a.jobId, status: 'processing' };
@@ -795,7 +803,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     }
     const resume = `Still analyzing: call vivid_analyze_product with jobId "${started.jobId}" to keep waiting — do NOT start a new analysis.`;
     if (!a.wait) return json({ jobId: started.jobId, status: started.status, hint: resume });
-    const deadline = Date.now() + a.timeoutSec * 1000;
+    const deadline = Date.now() + remaining(startedAt, a.timeoutSec);
     let last: AnalyzeStatus = { status: 'processing' };
     while (Date.now() < deadline) {
       await sleep(4000);
@@ -1070,8 +1078,9 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
   }, g(async (a) => {
     // Hosted connector: the locate + edit steps often outlast its ~1 min cut,
     // so run it on the queue and wait ~40 s; the local server stays sync.
+    const startedAt = Date.now();
     const finishAsync = async (jobId: string) => {
-      const r = await pollUntilDone(async () => (await client.get<JobStatus>(`/api/ai/image-status/${jobId}`)).data, 40_000, 3000);
+      const r = await pollUntilDone(async () => (await client.get<JobStatus>(`/api/ai/image-status/${jobId}`)).data, remaining(startedAt, 40), 3000);
       const done = r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled';
       return json({
         jobId, status: r.status, assetId: r.assetId, downloadUrl: await dl(r.downloadUrl ?? r.assetId), error: r.error,

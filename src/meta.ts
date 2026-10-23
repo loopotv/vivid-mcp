@@ -1,5 +1,5 @@
 /** Shared between the stdio server (index.ts) and the remote Worker (worker.ts). */
-export const VERSION = '0.34.0';
+export const VERSION = '0.34.1';
 
 const BASE_INSTRUCTIONS = [
   'VIVID is an AI content studio for e-commerce (vividai.tv). This server drives the account linked to the API key.',
