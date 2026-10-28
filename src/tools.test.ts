@@ -339,7 +339,7 @@ describe('vivid-mcp tools', () => {
     routes.set('GET /api/ai/music-status/task123', () => ({ body: { success: true, data: { taskId: 'task123', status: 'completed', url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, requestedSeconds: 88, provider: 'minimax-music-3.0', credits: 14 } } }));
     const client = await connect();
     const r = await client.callTool({ name: 'vivid_generate_music', arguments: { prompt: 'warm lo-fi, 85 BPM', durationSec: 88 } });
-    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'minimax-music-3.0', instrumental: true, format: 'mp3', async: true });
+    expect(calls[0].body).toEqual({ prompt: 'warm lo-fi, 85 BPM', duration: 88, provider: 'suno-v6', instrumental: true, format: 'mp3', async: true });
     expect(JSON.parse(textOf(r))).toMatchObject({ status: 'completed', url: 'https://api.test/api/temp/tmp/music/t.mp3', durationSeconds: 97.5, credits: 14 });
   });
 

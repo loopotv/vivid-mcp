@@ -22,7 +22,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_analyze_product` · `vivid_create_testimonial` | Save a product from a photo (free, plan quota) or create a reusable testimonial from three photos or attributes (50 credits) — both then usable by name |
 | `vivid_list_voices` | TTS providers and preset voices with credit cost |
 | `vivid_chat` | One chat completion on VIVID's LLM routing — Grok, Claude, OpenAI GPT, Kimi (Wavespeed)  |
-| `vivid_generate_music` · `vivid_music_status` · `vivid_list_music_providers` | Unique track from a brief — MiniMax Music 3.0 (14 credits, charged when ready; vocals optional; length is a hint, trim in the editor). Rendering takes 1–3 min: the tool waits up to `waitSec`, then returns a `taskId` for `vivid_music_status` |
+| `vivid_generate_music` · `vivid_music_status` · `vivid_list_music_providers` | Unique track from a brief — Suno V6 (default, 6 credits for two takes, exact length for instrumentals) or MiniMax Music 3.0 (14 credits, length is a hint, trim in the editor); vocals optional, charged when ready. Rendering takes 20 s–3 min: the tool waits up to `waitSec`, then returns a `taskId` for `vivid_music_status` |
 | `vivid_analyze_audio` | Tempo (BPM, beat grid) and transient peaks of a music/voice file, computed server-side (free): the cut points for a dynamic montage, also used automatically by `CUT_TO_BEAT` (grid `beats` \| `peaks`) |
 | `vivid_transcribe` | Speech-to-text (Deepgram Nova-3, free): per-word timestamps, readable cues, SRT/VTT export — from an asset, URL or local file |
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
@@ -145,7 +145,7 @@ The tool's text result goes to stdout; the exit code is 1 when the tool reports 
 - "Generate 2 images of a leather handbag on a marble counter, 4:5, with nano-banana-2."
 - "Upload ~/Desktop/bag.jpg and make a 10 s 9:16 video with Seedance 2.5 using it as the product reference. Tell me when it's done."
 - "Download my last video to ~/Downloads and give me a public link."
-- "Make a ~90 s upbeat instrumental for a product film with MiniMax and save it to ./music."
+- "Make a 30 s upbeat instrumental for a product film and save both takes to ./music."
 - "Transcribe ./voiceover.mp3 in Italian and write word-level SRT to ./subs.srt."
 - "Create a 9:16 editor project from my last two videos, cut each to 4 s with a dissolve between them, add the title 'New drop' for the first 3 s, then render it."
 - "In my last generated image, make the ring on the ring finger a plain yellow gold band, then compare it with ./sku/ring-01.jpg and tell me if it passes."

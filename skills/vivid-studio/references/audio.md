@@ -16,12 +16,13 @@ The MCP tools cannot clone a voice from a recording. For a consistent presenter,
 
 ## Music
 
-1. `vivid_list_music_providers` for the price (MiniMax Music 3.0, about 14 credits, charged only when the track is ready).
-2. `vivid_generate_music {prompt, durationSec, instrumental, lyrics?}`. The prompt is an English brief: genre, mood, instruments, tempo, what it accompanies.
-3. Rendering takes 1–3 minutes. If it returns `status:"processing"` with a `taskId`, poll `vivid_music_status {taskId}`.
-- There is **no exact length control**: `durationSec` is a hint and a 30 s request may return ~2 min. Trim in the editor.
+1. `vivid_list_music_providers` for the prices. Default `suno-v6` (about 6 credits for **two takes** of the same brief); `minimax-music-3.0` (about 14 credits, one take). Charged only when the track is ready.
+2. `vivid_generate_music {prompt, durationSec, instrumental, lyrics?, provider?}`. The prompt is an English brief: genre, mood, instruments, tempo, what it accompanies.
+3. Suno is usually ready in 20–90 s, MiniMax in 1–3 minutes. If it returns `status:"processing"` with a `taskId`, poll `vivid_music_status {taskId}`.
+- Suno returns `url` plus `alternates[]`: play or offer both and let the user pick.
+- Length: Suno honours `durationSec` (10–360 s) within 1–3 s for instrumentals and for vocals with `lyrics`; trim the last seconds in the editor or fade out. A sung Suno track **without** lyrics (Suno writes them) and every MiniMax track ignore the length: a 30 s request may return 2–3 min.
 - With vocals: `instrumental:false` and optional `lyrics` with `[Verse]` / `[Chorus]` tags.
-- Tracks are royalty-free and unique.
+- Tracks are unique to the request.
 
 ## Transcription and subtitles
 
