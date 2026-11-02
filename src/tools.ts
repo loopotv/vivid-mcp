@@ -5,7 +5,7 @@ import { VividClient, VividApiError, extensionFor, sleep } from './client.js';
 import { ensureBeatAnalysis, editUrlFor, importMedia, loadProject, newProject, saveProject, summarize, subtitlesOf, type AiCommand, type MediaImport } from './editor.js';
 import { openHeadlessProject, projectSchemaV2 } from 'vivid-editor-core';
 import { resolveAssetUrl } from './editor.js';
-import { commandsSchema } from './commands-schema.js';
+import { commandsSchema, flatCommandsSchema, parseCommands } from './commands-schema.js';
 
 // ── API shapes (subset we surface) ─────────────────────────────────────────
 
@@ -125,6 +125,9 @@ export interface LocalIo {
  * leaner replies (no timestamps, raw dumps or diagnostics) and a neutral
  * out-of-credits message pointing to an informational page.
  */
+/** Persona fields read by /api/ai/create-testimonial-scratch (vivid-workers routes/testimonial.ts). */
+const PERSONA_FIELDS = ['gender', 'age', 'ethnicity', 'species', 'bodyType', 'faceShape', 'nose', 'mouth', 'eyeShape', 'eyeColor', 'hairColor', 'hairStyle', 'hairTexture', 'skinType', 'skinColor', 'expression', 'accessories', 'distinguishingMarks'] as const;
+
 export type ToolProfile = 'default' | 'openai';
 
 export interface ToolOptions { profile?: ToolProfile }
@@ -829,7 +832,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       + ' (gender and age required; optional ethnicity, bodyType, faceShape, nose, eyeShape, eyeColor, hairColor, hairStyle, hairTexture, skinType, skinColor, expression, distinguishingMarks… values in English as in the app, e.g. gender "Female", age "25-35", ethnicity "Mediterranean"). Costs 50 credits. Takes 1–3 minutes; waits by default and returns the assigned name (personId) and the composite asset. The name is picked automatically from a curated pool.',
     inputSchema: {
       ...notOpenai({ photos: z.object({ left: z.string(), front: z.string(), right: z.string() }).optional().describe(L('Local paths or URLs of the three views of a real person.', 'URLs of the three views of a real person.')) }),
-      attributes: z.record(z.string(), z.string()).optional().describe('From-scratch persona attributes (gender, age + optional ethnicity and look fields).'),
+      // openai: explicit fields — ChatGPT rejects a record (propertyNames + schema-valued additionalProperties).
+      attributes: (openai ? z.object(Object.fromEntries(PERSONA_FIELDS.map((k) => [k, z.string().optional()]))) as unknown as z.ZodType<Record<string, string>> : z.record(z.string(), z.string())).optional().describe('From-scratch persona attributes (gender, age + optional ethnicity and look fields).'),
       ...notOpenai({ consent: z.boolean().optional().describe('Required with `photos`: true only once the user has confirmed the person pictured is them or has given consent. Never assume it.') }),
       locale: z.enum(['it', 'en', 'es']).default('it'),
       projectId: z.string().optional(),
@@ -1263,6 +1267,10 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
   // The closed list of editor operations, each with a typed payload
   // (commands-schema.ts): no generic executor.
   // Commands that read the music's beat grid: CUT_TO_BEAT and the beat-flash recipe.
+  // openai profile: ChatGPT rejects the full typed union, so it gets a flat
+  // {type, payload} list and the handler validates against commandSchema.
+  const commandsInput = openai ? flatCommandsSchema : commandsSchema;
+  const commandsOf = (c: unknown) => (openai && c !== undefined ? parseCommands(c) : c as z.output<typeof commandsSchema> | undefined);
   const needsBeatAnalysis = (commands: Array<{ type: string; payload?: unknown }> | undefined) => !!commands?.some((c) =>
     c.type === 'CUT_TO_BEAT' || (c.type === 'APPLY_EFFECT_RECIPE' && (c.payload as { recipe?: string } | undefined)?.recipe === 'beat-flash'));
 
@@ -1321,16 +1329,17 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
       name: z.string().min(1).max(120),
       canvasPreset: z.enum(['landscape', 'landscape-fhd', 'portrait', 'portrait-fhd', 'square', 'social']).default('portrait-fhd'),
       media: z.array(mediaSchema).optional().describe('Media to import into the project library.'),
-      commands: commandsSchema.optional().describe('Initial commands, e.g. ADD_CLIP for each media item.'),
+      commands: commandsInput.optional().describe('Initial commands, e.g. ADD_CLIP for each media item.'),
     },
     // creates a new project
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, g(async (a) => {
+    const commands = commandsOf(a.commands);
     const file = newProject(a.name, a.canvasPreset);
     const editor = openHeadlessProject(file, { resolveUrl: resolveAssetUrl(client) });
     const imported = await addMedia(editor, a.media);
-    const audioAnalysis = needsBeatAnalysis(a.commands) ? await ensureBeatAnalysis(client, editor) : undefined;
-    const result = a.commands?.length ? editor.apply(a.commands as unknown as AiCommand[]) : { applied: 0, errors: [], warnings: [], created: undefined };
+    const audioAnalysis = needsBeatAnalysis(commands) ? await ensureBeatAnalysis(client, editor) : undefined;
+    const result = commands?.length ? editor.apply(commands as unknown as AiCommand[]) : { applied: 0, errors: [], warnings: [], created: undefined };
     const out = editor.toProjectFile();
     const check = projectSchemaV2.safeParse(out);
     if (!check.success) throw new VividApiError(`Project failed validation before save: ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);
@@ -1343,17 +1352,18 @@ Speed: UPDATE_CLIP.playbackRate is constant per clip; SET_SPEED_RAMP {clipId, pr
     description: `Apply editing commands to a saved editor project — clips, trims, speed and speed ramps, transitions, canvas preset (16:9 ↔ 9:16), texts (incl. animated gradient fills), word-level subtitles, masks, keyframes, audio — through the same engine as the VIVID web editor, then save it back under the same id. Optionally import media first. Returns applied/errors (plus warnings for things applied but likely not visible, e.g. motion blur on a still clip), the ids created, and the updated timeline. Render the result with vivid_render_project.\n${COMMANDS_DOC}`,
     inputSchema: {
       projectAssetId: z.string().min(1),
-      commands: commandsSchema.min(1),
+      commands: commandsInput.min(1),
       media: z.array(mediaSchema).optional().describe('Media to import into the library before applying the commands.'),
       dryRun: z.boolean().default(false).describe('Apply and report, but do not save.'),
     },
     // edits the project in place — commands can remove clips
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, g(async (a) => {
+    const commands = commandsOf(a.commands)!;
     const { editor } = await loadProject(client, a.projectAssetId);
     const imported = await addMedia(editor, a.media);
-    const audioAnalysis = needsBeatAnalysis(a.commands) ? await ensureBeatAnalysis(client, editor) : undefined;
-    const result = editor.apply(a.commands as unknown as AiCommand[]);
+    const audioAnalysis = needsBeatAnalysis(commands) ? await ensureBeatAnalysis(client, editor) : undefined;
+    const result = editor.apply(commands as unknown as AiCommand[]);
     const out = editor.toProjectFile();
     const check = projectSchemaV2.safeParse(out);
     if (!check.success) throw new VividApiError(`Project failed validation after edit (not saved): ${check.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`, 500);

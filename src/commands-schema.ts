@@ -11,6 +11,7 @@ import {
   SetObjectAnimationSchema, AddEffectSchema, RemoveEffectSchema, SetEffectKeyframesSchema,
   AddAudioReactiveSchema, SetMaskSchema, SetAnimationsSchema, ApplyEffectRecipeSchema,
 } from 'vivid-editor-core';
+import { VividApiError } from './client.js';
 
 const ms = z.number().min(0);
 const unit = z.number().min(0).max(1);
@@ -111,3 +112,30 @@ export const commandSchema = z.discriminatedUnion('type', [
 ]);
 
 export const commandsSchema = z.array(commandSchema);
+
+/** Every command type, in the order of commandSchema. */
+export const COMMAND_TYPES = commandSchema.options.map((o) => [...o.shape.type.values][0] as string) as [string, ...string[]];
+
+/**
+ * What the openai profile publishes for `commands`: ChatGPT refuses the full
+ * union (oneOf/anyOf nesting, bezier tuples, propertyNames, non-boolean
+ * additionalProperties from `.loose()`). A flat {type, payload} with a free
+ * payload object; the handler validates against commandSchema via
+ * parseCommands, so a bad payload still comes back to the model as an error.
+ */
+export const flatCommandsSchema = z.array(z.object({
+  type: z.enum(COMMAND_TYPES),
+  payload: z.object({}).loose().meta({ additionalProperties: true }).describe('Payload of this command type, as documented in the tool description.'),
+}));
+
+/** Full validation of commands published with flatCommandsSchema; throws a readable message listing every invalid command. */
+export function parseCommands(commands: unknown): z.output<typeof commandsSchema> {
+  const r = commandsSchema.safeParse(commands);
+  if (r.success) return r.data;
+  const lines = r.error.issues.slice(0, 8).map((i) => {
+    const [idx, ...path] = i.path;
+    const type = typeof idx === 'number' ? (commands as Array<{ type?: string }>)[idx]?.type : undefined;
+    return `commands[${String(idx)}]${type ? ` (${type})` : ''}${path.length ? ` ${path.join('.')}` : ''}: ${i.message}`;
+  });
+  throw new VividApiError(`Invalid commands, nothing was applied — fix them and retry:\n${lines.join('\n')}${r.error.issues.length > 8 ? `\n…and ${r.error.issues.length - 8} more` : ''}`, 400);
+}

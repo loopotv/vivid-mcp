@@ -802,6 +802,75 @@ describe('openai profile', () => {
     expect(props('vivid_generate_image')).not.toContain('modelImageUrls');
   });
 
+  /** Constructs ChatGPT's tool-schema validator refuses (400 mcp_validation on refresh_actions, 02/11/2026). */
+  function unsupportedConstructs(schema: unknown): string[] {
+    const found: string[] = [];
+    const walk = (n: unknown, path: string, isSchema: boolean) => {
+      if (Array.isArray(n)) return n.forEach((x, i) => walk(x, `${path}[${i}]`, isSchema));
+      if (!n || typeof n !== 'object') return;
+      const o = n as Record<string, unknown>;
+      if (isSchema) {
+        for (const k of ['$ref', '$defs', 'definitions', 'oneOf', 'anyOf', 'allOf', 'not', 'prefixItems', 'propertyNames', 'patternProperties']) if (k in o) found.push(`${path}: ${k}`);
+        if ('additionalProperties' in o && typeof o.additionalProperties !== 'boolean') found.push(`${path}: additionalProperties not boolean`);
+        if (!('type' in o) && !('enum' in o)) found.push(`${path}: no type`);
+        if (Array.isArray(o.type)) found.push(`${path}: type union`);
+        if (Array.isArray(o.items)) found.push(`${path}: tuple`);
+      }
+      for (const [k, v] of Object.entries(o)) {
+        if (k === 'properties' && v && typeof v === 'object') for (const [p, s] of Object.entries(v)) walk(s, `${path}.properties.${p}`, true);
+        else if (['items', 'additionalProperties', 'anyOf', 'oneOf', 'allOf', 'prefixItems', '$defs', 'definitions'].includes(k)) walk(v, `${path}.${k}`, typeof v === 'object');
+      }
+    };
+    walk(schema, '', true);
+    return found;
+  }
+
+  it('every tool schema is one ChatGPT accepts (no $ref/oneOf/anyOf/tuples/records/loose objects)', async () => {
+    const bad = (await toolsOf()).flatMap((t) => [
+      ...unsupportedConstructs(t.inputSchema).map((f) => `${t.name} input${f}`),
+      ...(t.outputSchema ? unsupportedConstructs(t.outputSchema).map((f) => `${t.name} output${f}`) : []),
+    ]);
+    expect(bad).toEqual([]);
+  });
+
+  it('the scan catches what the default profile still publishes (full command union)', async () => {
+    const server = new McpServer({ name: 'test-default', version: '0.0.0' });
+    registerTools(server, new VividClient({ apiKey: 'vivid_test', apiUrl: 'https://api.test', fetchImpl: fetchMock }));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    await client.connect(clientTransport);
+    const tool = (await client.listTools()).tools.find((t) => t.name === 'vivid_edit_timeline')!;
+    expect(unsupportedConstructs(tool.inputSchema).some((f) => f.includes('oneOf'))).toBe(true);
+  });
+
+  it('timeline commands: flat {type, payload} schema, full validation in the handler', async () => {
+    const tools = await toolsOf();
+    const items = (tools.find((t) => t.name === 'vivid_edit_timeline')!.inputSchema as { properties: { commands: { items: { properties: { type: { enum: string[] } } } } } }).properties.commands.items;
+    expect(items.properties.type.enum).toEqual(expect.arrayContaining(['ADD_CLIP', 'SET_EFFECT_KEYFRAMES', 'APPLY_EFFECT_RECIPE', 'SET_MASK']));
+
+    const A = 'a'.repeat(32);
+    const P = 'p'.repeat(32);
+    let saved: unknown;
+    routes.set(`GET /api/assets/${A}`, () => ({ body: { success: true, data: { id: A, type: 'video', filename: 'hero.mp4', duration_sec: 10, metadata: '{"width":1080,"height":1920}', created_at: 'now' } } }));
+    routes.set('POST /api/ai/save-editor-project', (init) => { saved = (JSON.parse(String(init.body)) as { projectData: unknown }).projectData; return { body: { success: true, data: { assetId: P, r2Key: 'k' } } }; });
+    routes.set(`GET /api/assets/${P}/download`, () => ({ body: JSON.stringify(saved), raw: true }));
+    const client = await connectOpenai();
+    const ok = await client.callTool({ name: 'vivid_create_editor_project', arguments: { name: 'Spot', media: [{ source: A }], commands: [{ type: 'ADD_CLIP', payload: { assetId: A } }] } });
+    expect(ok.isError).toBeFalsy();
+    expect(JSON.parse(textOf(ok)).applied).toBe(1);
+
+    calls.length = 0;
+    const bad = await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: P, commands: [
+      { type: 'SPLIT_CLIP', payload: { clipId: 'c1' } },
+      { type: 'SET_TRANSITION', payload: { clipId: 'c1', edge: 'middle', type: 'dissolve', durationMs: 300 } },
+    ] } });
+    expect(bad.isError).toBe(true);
+    expect(textOf(bad)).toContain('commands[0] (SPLIT_CLIP) payload.splitAtMs');
+    expect(textOf(bad)).toContain('commands[1] (SET_TRANSITION) payload.edge');
+    expect(calls.some((c) => c.path === '/api/ai/save-editor-project')).toBe(false);
+  });
+
   it('video audio must be a voice or track VIVID generated', async () => {
     routes.set('POST /api/ai/generate-video', () => ({ body: { success: true, data: { jobId: 'v1', creditsRemaining: 1 } } }));
     const client = await connectOpenai();
@@ -868,10 +937,12 @@ describe('openai profile', () => {
     expect(props('vivid_generate_voice')).not.toContain('filename');
   });
 
-  it('timeline commands are typed per operation', async () => {
+  it('timeline commands are a closed list, each payload validated before any call (no generic executor)', async () => {
     const tools = await toolsOf();
-    const schema = JSON.stringify(tools.find((t) => t.name === 'vivid_edit_timeline')!.inputSchema);
-    expect(schema).toContain('splitAtMs');
+    const tool = tools.find((t) => t.name === 'vivid_edit_timeline')!;
+    // ChatGPT cannot take the typed union: the type is an enum, payloads are documented in the description.
+    expect(JSON.stringify(tool.inputSchema)).toContain('"enum":["ADD_CLIP"');
+    expect(tool.description).toContain('SPLIT_CLIP {clipId, splitAtMs}');
     const client = await connectOpenai();
     const r = await client.callTool({ name: 'vivid_edit_timeline', arguments: { projectAssetId: 'p1', commands: [{ type: 'SPLIT_CLIP', payload: { anything: 1 } }] } });
     expect(r.isError).toBe(true);
