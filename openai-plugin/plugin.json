@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "app-6ab2ab8967dc81919a6812daf916b10d",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Product photos, short videos, voice-overs and music for e-commerce, made in your VIVID account.",
   "author": {
     "name": "Alessandro Brunello",
