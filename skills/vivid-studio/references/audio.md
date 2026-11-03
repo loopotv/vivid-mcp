@@ -14,6 +14,10 @@
 
 The MCP tools cannot clone a voice from a recording. For a consistent presenter, use a preset or a voice the user saved in the VIVID web app, where they confirm the voice is their own. Never speed up a recorded human voice to fit a cut — trim the script instead.
 
+## Existing sounds (Freesound)
+
+For sound effects, or when the user wants an existing loop instead of a new track: `vivid_search_sounds {query, maxDurationSec?}` (free). Only CC0 and CC BY by default; for CC BY put the returned `attribution` in the caption or credits. Do not set `includeNonCommercial` for ads or product videos. Pass `previewUrl` as a media `source` to the timeline tools.
+
 ## Music
 
 1. `vivid_list_music_providers` for the prices. Default `suno-v6` (about 6 credits for **two takes** of the same brief); `minimax-music-3.0` (about 14 credits, one take). Charged only when the track is ready.

@@ -64,7 +64,7 @@ describe('vivid-mcp tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_product_sheet', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
-      'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_search_sounds', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -357,6 +357,24 @@ describe('vivid-mcp tools', () => {
     ready = true;
     const r2 = await client.callTool({ name: 'vivid_music_status', arguments: { taskId: 'task456', waitSec: 0 } });
     expect(JSON.parse(textOf(r2))).toMatchObject({ status: 'completed', url: 'https://api.test/api/temp/tmp/music/u.mp3' });
+  });
+
+  it('vivid_search_sounds asks for commercial licenses by default and builds the attribution', async () => {
+    let seen: URL | undefined;
+    routes.set('GET /api/ai/music-search', (_i, url) => { seen = url; return { body: { success: true, data: { results: [
+      { id: 1, name: 'Lofi Loop', duration: 12.345, tags: ['lofi'], username: 'bob', licenseId: 'cc-by', previews: { 'preview-hq-mp3': 'https://cdn.freesound.org/1.mp3' }, url: 'https://freesound.org/people/bob/sounds/1/' },
+      { id: 2, name: 'Hit', duration: 1, username: 'amy', licenseId: 'cc0', previews: { 'preview-lq-mp3': 'https://cdn.freesound.org/2.mp3' } },
+    ] } } }; });
+    const client = await connect();
+    const out = JSON.parse(textOf(await client.callTool({ name: 'vivid_search_sounds', arguments: { query: 'lofi', maxDurationSec: 60 } })));
+    expect(seen?.searchParams.get('license')).toBe('commercial');
+    expect(seen?.searchParams.get('max_duration')).toBe('60');
+    expect(out.count).toBe(2);
+    expect(out.sounds[0]).toMatchObject({ durationSec: 12.3, license: 'cc-by', commercialUse: true, previewUrl: 'https://cdn.freesound.org/1.mp3', attribution: '"Lofi Loop" by bob (freesound.org) — CC-BY' });
+    expect(out.sounds[1]).toMatchObject({ attribution: null, previewUrl: 'https://cdn.freesound.org/2.mp3', pageUrl: 'https://freesound.org/s/2/' });
+
+    await client.callTool({ name: 'vivid_search_sounds', arguments: { query: 'x', includeNonCommercial: true } });
+    expect(seen?.searchParams.has('license')).toBe(false);
   });
 
   it('vivid_transcribe sends an asset id as assetId and returns words + cues', async () => {

@@ -1029,6 +1029,40 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     return json({ providers: (data.providers ?? []).map((p) => pick(p, ['id', 'label', 'credits', 'exactDuration', 'vocals', 'maxDuration', 'available', 'default'])) });
   }));
 
+  server.registerTool('vivid_search_sounds', {
+    title: 'Search Freesound (music, loops, sound effects)',
+    description: 'Search the Freesound.org library for existing music, loops and sound effects (free, no credits). By default only licenses usable in commercial content are returned: CC0 (no attribution) and CC BY (credit the author — `attribution` is the line to put in the caption or credits). Results carry an MP3 preview URL (~128 kbps, fine for social video): pass it as a media `source` to vivid_create_editor_project / vivid_edit_timeline, or to vivid_analyze_audio for beats. For a track written to a brief, use vivid_generate_music instead.',
+    inputSchema: {
+      query: z.string().min(1).describe('Keywords, e.g. "lofi piano loop", "whoosh transition", "crowd applause".'),
+      maxDurationSec: z.number().int().min(1).max(3600).default(300).describe('Longest sound to return, in seconds.'),
+      includeNonCommercial: z.boolean().default(false).describe('Also return CC BY-NC sounds. Never use them in ads, product videos or any commercial content.'),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  }, g(async (a) => {
+    const qs = new URLSearchParams({ q: a.query, max_duration: String(a.maxDurationSec) });
+    if (!a.includeNonCommercial) qs.set('license', 'commercial');
+    const { data } = await client.get<{ results: Array<Record<string, unknown>> }>(`/api/ai/music-search?${qs}`);
+    const sounds = (data.results ?? []).map((r) => {
+      const previews = (r.previews ?? {}) as Record<string, string>;
+      const license = String(r.licenseId ?? 'other');
+      const author = String(r.username ?? '');
+      return {
+        id: r.id,
+        name: r.name,
+        durationSec: typeof r.duration === 'number' ? Math.round(r.duration * 10) / 10 : r.duration,
+        tags: Array.isArray(r.tags) ? r.tags.slice(0, 8) : [],
+        author,
+        license,
+        commercialUse: license === 'cc0' || license === 'cc-by',
+        attribution: license === 'cc0' ? null : `"${r.name}" by ${author} (freesound.org) — ${license.toUpperCase()}`,
+        previewUrl: previews['preview-hq-mp3'] ?? previews['preview-lq-mp3'] ?? null,
+        waveformUrl: ((r.images ?? {}) as Record<string, string>).waveform_m ?? null,
+        pageUrl: r.url ?? `https://freesound.org/s/${r.id}/`,
+      };
+    });
+    return json({ count: sounds.length, sounds });
+  }));
+
   // ── Transcription / subtitles ────────────────────────────────────────────
 
   server.registerTool('vivid_transcribe', {
