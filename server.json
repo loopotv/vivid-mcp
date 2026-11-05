@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.loopotv/vivid-mcp",
+  "title": "VIVID AI Studio",
+  "description": "VIVID (vividai.tv) AI studio: product photos, videos, voice, music and timelines for e-commerce.",
+  "websiteUrl": "https://vividai.tv/mcp",
+  "repository": {
+    "url": "https://github.com/loopotv/vivid-mcp",
+    "source": "github"
+  },
+  "version": "0.36.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.vividai.tv/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer vk_... — your VIVID API key (vividai.tv → Settings → API key). Not needed with OAuth clients such as Claude.ai connectors.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
