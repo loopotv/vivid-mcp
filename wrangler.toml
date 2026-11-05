@@ -30,3 +30,22 @@ WELL_KNOWN_JSON = "{\"/.well-known/openai-apps-challenge\": \"ePa8XLsKA-xx36zfDI
 
 [observability]
 enabled = true
+
+# ── Staging: same Worker on workers.dev with anonymous discovery on ──────────
+# Deploy: `npx wrangler deploy --env staging`
+# OAuth logins can't complete here (the consent page only returns to
+# mcp.vividai.tv); use it to check that clients still start the OAuth flow.
+[env.staging]
+name = "vivid-mcp-remote-staging"
+workers_dev = true
+routes = []
+
+[[env.staging.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "REPLACE_WITH_STAGING_KV_ID"
+
+[env.staging.vars]
+VIVID_API_URL = "https://vivid-api.vividoai.workers.dev"
+CONSENT_URL = "https://vividai.tv/oauth/consent"
+WELL_KNOWN_JSON = "{}"
+PUBLIC_DISCOVERY = "1"
