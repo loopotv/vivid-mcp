@@ -4,6 +4,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { VividClient, DEFAULT_API_URL } from './client.js';
 import { registerTools, type ToolProfile } from './tools.js';
 import { VERSION, INSTRUCTIONS, OPENAI_INSTRUCTIONS } from './meta.js';
+import { isDiscoveryOnly } from './discovery.js';
 
 /**
  * vivid-mcp as a remote MCP server (Cloudflare Worker, Streamable HTTP).
@@ -52,6 +53,11 @@ interface Env {
    * by the provider and always win.
    */
   WELL_KNOWN_JSON?: string;
+  /**
+   * "1" lets an anonymous client call initialize and tools/list (see
+   * isDiscoveryOnly). Off unless set, so a deploy without it behaves as before.
+   */
+  PUBLIC_DISCOVERY?: string;
 }
 
 /** What the OAuth grant carries to /mcp (encrypted at rest by the provider). */
@@ -330,6 +336,9 @@ function openidConfiguration(origin: string) {
   };
 }
 
+/** Placeholder credential for anonymous discovery: tool registration makes no API call. */
+const ANONYMOUS_KEY = 'anonymous';
+
 export default {
   async fetch(rawRequest: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const request = normalizeDiscovery(rawRequest);
@@ -340,6 +349,11 @@ export default {
     if (profile && !request.headers.get('authorization')) {
       const key = request.headers.get('x-api-key')?.trim();
       if (key && isPrintableKey(key)) return handleMcp(request, env, key, profile);
+      // No credential at all: answer discovery, leave everything else to the provider (401).
+      if (!key && env.PUBLIC_DISCOVERY === '1' && request.method === 'POST') {
+        const body = await request.clone().json().catch(() => null);
+        if (isDiscoveryOnly(body)) return handleMcp(request, env, ANONYMOUS_KEY, profile);
+      }
     }
     return providerFor(env).fetch(request, env, ctx);
   },
