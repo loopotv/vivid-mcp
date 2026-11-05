@@ -1,5 +1,7 @@
 # vivid-mcp
 
+[![mcptry](https://mcptry.com/badge/io.github.loopotv/vivid-mcp)](https://mcptry.com/servers/io.github.loopotv/vivid-mcp)
+
 MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-commerce. Connect your VIVID account to Claude Desktop, Claude Code, Cursor or any [Model Context Protocol](https://modelcontextprotocol.io) client and generate images and videos, browse your gallery and manage jobs from the chat.
 
 ## What you can do
