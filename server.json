@@ -4,6 +4,15 @@
   "title": "VIVID AI Studio",
   "description": "VIVID (vividai.tv) AI studio: product photos, videos, voice, music and timelines for e-commerce.",
   "websiteUrl": "https://vividai.tv/mcp",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/loopotv/vivid-mcp/main/icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
   "repository": {
     "url": "https://github.com/loopotv/vivid-mcp",
     "source": "github"
