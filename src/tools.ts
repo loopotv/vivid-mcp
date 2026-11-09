@@ -467,7 +467,8 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       aspectRatio: z.enum(['1:1', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '3:2', '2:3']).default('1:1'),
       numImages: z.number().int().min(1).max(4).default(1),
       resolution: z.string().optional().describe('Model-specific, e.g. "1K" | "2K" | "4K" when supported.'),
-      quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Quality tier for models that price by quality (GPT Image 2 / 2.5, Ideogram 4.5): credits grow with quality × resolution — see creditRates in vivid_list_models (e.g. gpt-image-2.5 1K: low 4, medium 5, high 12, xhigh 19, max 39; ideogram-4.5 1K or 2K: low 6, medium 9, high 25 — xhigh/max not supported). Default: medium (high for jewelry).'),
+      quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Quality tier for models that price by quality (GPT Image 2 / 2.5 / 2.6, Ideogram 4.5): credits grow with quality × resolution — see creditRates in vivid_list_models (e.g. gpt-image-2.5 1K: low 4, medium 5, high 12, xhigh 19, max 39; ideogram-4.5 1K or 2K: low 6, medium 9, high 25 — xhigh/max not supported). Default: medium (high for jewelry).'),
+      outputFormat: z.enum(['png', 'gif', 'svg']).optional().describe('File format, only on models whose capabilities.outputFormats list it (today gpt-image-2.6-sunburst / gpt-image-2.6-flare): "gif" = short animated loop (~9 frames, about 336 px whatever the resolution, same price as png), "svg" = vector (+2 credits; logos, icons, flat illustrations). Default png. GIF and SVG can\'t be retouched, upscaled or expanded afterwards.'),
       style: z.string().optional().describe('Optional style preset slug.'),
       products: z.array(z.string()).optional().describe('Saved products to feature, by name (as in the app\'s "#" picker, e.g. "Borsa Nera") or asset id — see vivid_list_references. The product\'s look and geometry are locked like in the app.'),
       testimonials: z.array(z.string()).optional().describe('Saved testimonials / characters to cast, by name (as in the app\'s "@" picker, e.g. "Lina") or asset id — see vivid_list_references. Identity is locked.'),
@@ -493,6 +494,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     const { data } = await client.post<ImageGenResult>('/api/ai/generate-image-v2', {
       prompt: a.prompt, model: a.model, aspectRatio: a.aspectRatio, numImages: a.numImages,
       resolution: a.resolution, quality: a.quality, style: a.style,
+      ...(a.outputFormat && a.outputFormat !== 'png' ? { outputFormat: a.outputFormat } : {}),
       ...(objectImageIds.length ? { objectImageIds } : {}),
       ...(modelImageIds.length ? { modelImageIds } : {}),
       objectImageUrls, modelImageUrls: a.modelImageUrls, contextImageUrls,

@@ -150,6 +150,16 @@ describe('vivid-mcp tools', () => {
     ]);
   }, 20000);
 
+  it('vivid_generate_image forwards gif / svg output, never png', async () => {
+    routes.set('POST /api/ai/generate-image-v2', () => ({ status: 202, body: { success: true, data: { jobId: 'j1', status: 'processing', creditsRemaining: 10 } } }));
+    const client = await connect();
+    await client.callTool({ name: 'vivid_generate_image', arguments: { prompt: 'a sparkling ring, looping', model: 'gpt-image-2.6-flare', outputFormat: 'gif', wait: false } });
+    await client.callTool({ name: 'vivid_generate_image', arguments: { prompt: 'a red bag on marble', model: 'gpt-image-2.6-flare', outputFormat: 'png', wait: false } });
+    const reqs = calls.filter((c) => c.path === '/api/ai/generate-image-v2');
+    expect(reqs[0].body).toMatchObject({ outputFormat: 'gif' });
+    expect(reqs[1].body).not.toHaveProperty('outputFormat');
+  });
+
   it('vivid_generate_image resolves saved products / testimonials by name into asset ids', async () => {
     routes.set('GET /api/assets/mentionable', () => ({ body: { success: true, data: [
       { id: 'p1', label: 'Borsa Nera', type: 'product', assetId: 'p1', metadata: { category: 'bag' } },
