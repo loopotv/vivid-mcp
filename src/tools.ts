@@ -269,6 +269,15 @@ function summariseModel(m: AiModel) {
       .filter(([k, v]) => k.startsWith('supports') && v === true)
       .map(([k]) => k.replace(/^supports/, '').replace(/^[A-Z]/, (c) => c.toLowerCase()));
     if (caps.maxReferenceImages) summary.maxReferenceImages = caps.maxReferenceImages;
+    // Seedance 2.5: draft:true previews at 480p, vivid_finalize_video_draft renders the same shot natively.
+    const draft = caps.draft as { resolution?: string; finalResolution?: string; finalCreditsPerSecond?: number; validDays?: number } | undefined;
+    if (draft) {
+      summary.draft = {
+        previewResolution: draft.resolution, finalResolution: draft.finalResolution,
+        finalCreditsPerSecond: draft.finalCreditsPerSecond, validDays: draft.validDays,
+        how: 'vivid_generate_video draft=true, then vivid_finalize_video_draft with its jobId',
+      };
+    }
   } else {
     summary.creditsPerImage = m.credits_per_use;
     if (caps.creditRates) summary.creditRates = caps.creditRates;
@@ -537,6 +546,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
         : 'Audio files: voice for talking-head models, or reference audio where supported.'),
       referenceVideoUrls: z.array(z.string().url()).max(3).optional().describe((openai ? 'Download URLs of videos in the VIVID gallery (vivid_list_assets type=video) — other videos are refused. ' : '') + 'Reference videos (MP4/MOV) to copy motion, rhythm or framing from. Seedance 2.0: max 3, 15 s in all. Seedance 2.5: max 3, 2–30 s each, 30 s in all, 480p or 720p only (never with start/end frame). Gemini Omni: 1 clip, first 10 s. Billed seconds: see vivid_list_models.'),
       mode: z.string().optional().describe('Model mode when applicable (e.g. "std" | "pro" for Kling O3).'),
+      draft: z.boolean().optional().describe('Seedance 2.5 only (models whose vivid_list_models entry has `draft`): a cheap 480p preview at the 480p rate (resolution is forced). If the shot is right, vivid_finalize_video_draft renders the SAME shot at native 1080p (not upscaled) within 7 days. Use it to try several takes before paying for 1080p.'),
       projectId: z.string().optional(),
       wait: z.boolean().default(false).describe('Block until the video is ready (polls up to timeoutSec). Prefer false + vivid_job_status for long clips.'),
       timeoutSec: z.number().int().min(30).max(900).default(420),
@@ -558,7 +568,7 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     ]);
     const { data } = await client.post<VideoGenResult>('/api/ai/generate-video', {
       prompt: a.prompt, model: a.model, requestedModel: a.model, duration: a.duration, aspectRatio: a.aspectRatio,
-      resolution: a.resolution, generateAudio: a.generateAudio, mode: a.mode,
+      resolution: a.draft ? '480p' : a.resolution, generateAudio: a.generateAudio, mode: a.mode, ...(a.draft ? { draft: true } : {}),
       startFrameUrl, endFrameUrl, referenceImageUrls, audioFileUrls: a.audioFileUrls,
       ...(a.referenceVideoUrls?.length ? { videoReferences: a.referenceVideoUrls.map((url) => ({ url })) } : {}),
       projectId: a.projectId, source: 'mcp',
@@ -566,7 +576,10 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
     if (data.requiresConfirmation) {
       return json({ requiresConfirmation: true, message: 'The backend asks for a confirmation (model incompatible with the inputs). Options:', confirmOptions: data.confirmOptions, routing: data.routing });
     }
-    const base = { jobId: data.jobId, creditsRemaining: data.creditsRemaining, warning: data.warning };
+    const base = {
+      jobId: data.jobId, creditsRemaining: data.creditsRemaining, warning: data.warning,
+      ...(a.draft ? { draft: true, next: `When it is ready and the shot is right: vivid_finalize_video_draft jobId=${data.jobId} (native 1080p, within 7 days).` } : {}),
+    };
     if (!a.wait) {
       return json({ ...base, status: 'processing', estimatedTime: data.estimatedTime, hint: `Poll with vivid_job_status jobId=${data.jobId}.` });
     }
@@ -575,6 +588,31 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       remaining(startedAt, a.timeoutSec), 10000,
     );
     return json({ ...base, status: final.status, assetId: final.assetId, downloadUrl: await dl(final.downloadUrl ?? final.assetId), error: final.error });
+  }));
+
+  server.registerTool('vivid_finalize_video_draft', {
+    title: 'Finalize a video draft at 1080p',
+    description: 'Render a Seedance 2.5 draft (made with vivid_generate_video draft=true) at native 1080p: the SAME shot — prompt, frames, duration, ratio and audio come from the draft — generated again at full resolution, not upscaled. A new video asset; the draft stays. Price: the model\'s draft.finalCreditsPerSecond in vivid_list_models × the draft\'s seconds (79 cr/s at launch). One final per draft: calling it again returns the same job without charging. Drafts expire 7 days after creation. Takes 1–5 minutes: returns the jobId by default — poll with vivid_job_status.',
+    inputSchema: {
+      jobId: z.string().min(1).describe('jobId of the completed draft.'),
+      wait: z.boolean().default(false).describe('Block until the 1080p video is ready (polls up to timeoutSec).'),
+      timeoutSec: z.number().int().min(30).max(900).default(420),
+    },
+    // spends credits once per draft (a repeat returns the same job), adds a new asset
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, g(async (a) => {
+    const startedAt = Date.now();
+    const { data } = await client.post<{ jobId: string; existing?: boolean } & Record<string, unknown>>(`/api/ai/video-draft/${encodeURIComponent(a.jobId)}/finalize`, {});
+    if (!a.wait) return json({ ...data, status: 'processing', hint: `Poll with vivid_job_status jobId=${data.jobId}.` });
+    const final = await pollUntilDone(
+      async () => (await client.get<JobStatus>(`/api/ai/video-status/${data.jobId}`)).data,
+      remaining(startedAt, a.timeoutSec), 10000,
+    );
+    const done = final.status === 'completed' || final.status === 'failed' || final.status === 'cancelled';
+    return json({
+      ...data, status: final.status, assetId: final.assetId, downloadUrl: await dl(final.downloadUrl ?? final.assetId), error: final.error,
+      hint: done ? undefined : `Still rendering (already paid): poll vivid_job_status jobId=${data.jobId} — do NOT finalize again.`,
+    });
   }));
 
   server.registerTool('vivid_job_status', {

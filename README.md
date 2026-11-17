@@ -29,6 +29,7 @@ MCP server for [VIVID](https://vividai.tv) — the AI content studio for e-comme
 | `vivid_retouch` | Edit ONE object of an image (text target, region or mask), rest byte-identical — 2–6 credits |
 | `vivid_upscale_image` | Upscale an image 2×/4× into a new asset: `faithful` (Bria, 4 cr), `sharp` (Crystal, 5/20 cr), `editorial` (Clarity Pro, 2.5 cr/MP); quality gate, free `quote` |
 | `vivid_upscale_video` | Upscale a video into a new asset: `faithful` (FLUX Video Upscale, ≤20 s, 1080p/2K, keeps the product) or `sharp` (1080p/2K/4K, up to 60 s, crisper, cheaper); free `quote` |
+| `vivid_finalize_video_draft` | Seedance 2.5: after `vivid_generate_video draft=true` (cheap 480p preview), render the same shot at native 1080p — once per draft, within 7 days |
 | `vivid_compare_product` | Visual QC of a render vs the SKU photo: match score, verdict, differences, fixPrompt — 1 credit |
 | `vivid_product_sheet` | Reads the reference sheet of a saved product and the price of a new one (free) |
 | `vivid_create_product_sheet` | Makes the reference sheet: front, two angles and worn, each checked against the real photo (one free redo, refund if it still fails) — 13 credits, first one free on the free plan |

@@ -62,7 +62,7 @@ describe('vivid-mcp tools', () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_product_sheet', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
+      'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_product_sheet', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_finalize_video_draft', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
       'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_search_sounds', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_upscale_image', 'vivid_upscale_video', 'vivid_usage', 'vivid_whoami',
     ]);
@@ -420,6 +420,23 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_retouch', arguments: { source: 'b'.repeat(32), prompt: 'gold band' } });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain('target, region or mask');
+  });
+
+  it('vivid_generate_video with draft forces 480p, sends draft and says how to finalize', async () => {
+    routes.set('POST /api/ai/generate-video', () => ({ status: 202, body: { success: true, data: { jobId: 'dr1', creditsRemaining: 100 } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_generate_video', arguments: { prompt: 'a ring on velvet', model: 'seedance-2.5', duration: 5, resolution: '1080p', draft: true } });
+    expect(calls[0].body).toMatchObject({ model: 'seedance-2.5', draft: true, resolution: '480p' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ jobId: 'dr1', draft: true });
+    expect(JSON.parse(textOf(r)).next).toContain('vivid_finalize_video_draft');
+  });
+
+  it('vivid_finalize_video_draft posts to the draft and returns the final job', async () => {
+    routes.set('POST /api/ai/video-draft/dr1/finalize', () => ({ status: 202, body: { success: true, data: { jobId: 'fin1', draftJobId: 'dr1', credits: 395, resolution: '1080p', durationSec: 5, existing: false } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_finalize_video_draft', arguments: { jobId: 'dr1' } });
+    expect(calls[0].path).toBe('/api/ai/video-draft/dr1/finalize');
+    expect(JSON.parse(textOf(r))).toMatchObject({ jobId: 'fin1', credits: 395, status: 'processing' });
   });
 
   it('vivid_upscale_image sends the asset as imageUrl + sourceAssetId with mode and scale', async () => {
