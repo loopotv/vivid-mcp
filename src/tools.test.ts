@@ -64,7 +64,7 @@ describe('vivid-mcp tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'vivid_analyze_audio', 'vivid_analyze_product', 'vivid_buy_credits', 'vivid_chat', 'vivid_compare_product', 'vivid_create_editor_project', 'vivid_create_product_sheet', 'vivid_create_testimonial', 'vivid_download_asset', 'vivid_edit_timeline', 'vivid_generate_image', 'vivid_generate_music', 'vivid_generate_video', 'vivid_generate_voice', 'vivid_get_asset', 'vivid_get_editor_project', 'vivid_job_status',
       'vivid_list_assets', 'vivid_list_editor_projects', 'vivid_list_jobs', 'vivid_list_models', 'vivid_list_music_providers', 'vivid_list_projects', 'vivid_list_references', 'vivid_list_voices',
-      'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_search_sounds', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_usage', 'vivid_whoami',
+      'vivid_music_status', 'vivid_product_sheet', 'vivid_record_ui', 'vivid_render_project', 'vivid_render_status', 'vivid_retouch', 'vivid_search_sounds', 'vivid_share_asset', 'vivid_transcribe', 'vivid_upload_file', 'vivid_upscale_image', 'vivid_upscale_video', 'vivid_usage', 'vivid_whoami',
     ]);
   });
 
@@ -420,6 +420,70 @@ describe('vivid-mcp tools', () => {
     const r = await client.callTool({ name: 'vivid_retouch', arguments: { source: 'b'.repeat(32), prompt: 'gold band' } });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain('target, region or mask');
+  });
+
+  it('vivid_upscale_image sends the asset as imageUrl + sourceAssetId with mode and scale', async () => {
+    const id = 'b'.repeat(32);
+    const out = 'c'.repeat(32);
+    routes.set('POST /api/ai/upscale', () => ({ body: { success: true, data: { assetId: out, mode: 'faithful', model: 'bria', creditsCost: 4, width: 2048, height: 2048, factor: 2, gate: { skipped: 'x' } } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_upscale_image', arguments: { source: id, scale: 2 } });
+    expect(calls[0].body).toMatchObject({ imageUrl: `https://api.test/api/assets/${id}/download`, sourceAssetId: id, mode: 'faithful', scale: 2 });
+    expect(JSON.parse(textOf(r))).toMatchObject({ assetId: out, creditsCost: 4, downloadUrl: `https://api.test/api/assets/${out}/download` });
+  });
+
+  it('vivid_upscale_image quote reads the size from the file header and charges nothing', async () => {
+    const id = 'b'.repeat(32);
+    // 24-byte PNG header with IHDR 1024×768
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    new DataView(png.buffer).setUint32(16, 1024);
+    new DataView(png.buffer).setUint32(20, 768);
+    const prev = fetchMock;
+    routes.set('POST /api/ai/upscale/quote', () => ({ body: { success: true, data: { width: 1024, height: 768, options: [] } } }));
+    const pngFetch = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
+      if (url.pathname === `/api/assets/${id}/download`) return new Response(png, { status: 200, headers: { 'content-type': 'image/png' } });
+      return (prev as unknown as (i: typeof input, n: RequestInit) => Promise<Response>)(input, init);
+    }) as unknown as typeof fetch;
+    const server = new McpServer({ name: 't', version: '0' });
+    registerTools(server, new VividClient({ apiKey: 'vivid_test', apiUrl: 'https://api.test', fetchImpl: pngFetch }));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const client = new Client({ name: 'c', version: '0' });
+    await client.connect(ct);
+    const r = await client.callTool({ name: 'vivid_upscale_image', arguments: { source: id, quote: true } });
+    expect(calls.find((c) => c.path === '/api/ai/upscale/quote')?.body).toEqual({ width: 1024, height: 768 });
+    expect(calls.some((c) => c.path === '/api/ai/upscale')).toBe(false);
+    expect(JSON.parse(textOf(r))).toMatchObject({ width: 1024, height: 768 });
+  });
+
+  it('vivid_upscale_video starts the job with mode + resolution and returns the jobId', async () => {
+    const id = 'd'.repeat(32);
+    routes.set('POST /api/ai/upscale-video', () => ({ status: 202, body: { success: true, data: { jobId: 'vu1', statusUrl: '/api/ai/video-status/vu1', mode: 'sharp', resolution: '4k', credits: 24, output: { width: 2160, height: 3840 } } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_upscale_video', arguments: { source: id, mode: 'sharp', resolution: '4k' } });
+    expect(calls[0].body).toMatchObject({ assetId: id, mode: 'sharp', resolution: '4k' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ jobId: 'vu1', status: 'processing', credits: 24 });
+  });
+
+  it('vivid_upscale_video turns a VIVID download URL into the asset id and can wait for the result', async () => {
+    const id = 'd'.repeat(32);
+    const out = 'e'.repeat(32);
+    routes.set('POST /api/ai/upscale-video', () => ({ status: 202, body: { success: true, data: { jobId: 'vu2', mode: 'faithful', resolution: '1080p', credits: 73 } } }));
+    routes.set('GET /api/ai/video-status/vu2', () => ({ body: { success: true, data: { jobId: 'vu2', status: 'completed', assetId: out, downloadUrl: `/api/assets/${out}/download` } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_upscale_video', arguments: { source: `https://api.test/api/assets/${id}/download`, wait: true } });
+    expect(calls[0].body).toMatchObject({ assetId: id, mode: 'faithful', resolution: '1080p' });
+    expect(JSON.parse(textOf(r))).toMatchObject({ status: 'completed', assetId: out, downloadUrl: `https://api.test/api/assets/${out}/download` });
+  });
+
+  it('vivid_upscale_video quote posts only the source', async () => {
+    routes.set('POST /api/ai/upscale-video/quote', () => ({ body: { success: true, data: { source: { width: 480, height: 854, durationSec: 27.9 }, options: [{ mode: 'faithful', resolution: '1080p', available: false, code: 'TOO_LONG' }] } } }));
+    const client = await connect();
+    const r = await client.callTool({ name: 'vivid_upscale_video', arguments: { source: 'https://api.test/api/temp/tmp/x.mp4', quote: true } });
+    expect(calls[0].body).toEqual({ url: 'https://api.test/api/temp/tmp/x.mp4' });
+    expect(JSON.parse(textOf(r)).options[0].code).toBe('TOO_LONG');
   });
 
   it('vivid_compare_product sends both asset ids and the SKU notes', async () => {

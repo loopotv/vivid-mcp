@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { readImageDimensions } from './image-dimensions.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { VividClient, VividApiError, extensionFor, sleep } from './client.js';
@@ -1157,6 +1158,108 @@ export function registerTools(server: McpServer, client: VividClient, io?: Local
       await io.writeFile(path, bytes);
     }
     return json({ ...data, downloadUrl: await dl(data.downloadUrl ?? data.assetId), path });
+  }));
+
+  // ── Upscale ──────────────────────────────────────────────────────────────
+
+  server.registerTool('vivid_upscale_image', {
+    title: 'Upscale an image (Fedele / Nitido / Editoriale)',
+    description: 'Enlarge an image 2× or 4× into a NEW asset (the original is untouched). Modes: `faithful` (Bria, 4 credits — never redraws, best for products and text), `sharp` (Crystal, creativity 0, 5 or 20 credits by size — crisper, may sharpen fine detail a little), `editorial` (Clarity Pro, 2.5 credits per output megapixel — the most detail, may reinterpret textures; for moodboards and fashion, not for SKU-exact products). A quality gate checks product fidelity and real sharpness before saving: when it fails nothing is saved or charged. Call with `quote: true` first to see output size and credits of every mode without spending anything. Note: on tiny worn pavé stones (a few pixels each) every model reinvents the stones — check jewellery close-ups with vivid_compare_product. GIF and SVG cannot be upscaled.',
+    inputSchema: {
+      source: z.string().min(1).describe(L('Asset id (32 hex), VIVID URL, other URL or local file path of the image.', 'Asset id (32 hex), VIVID URL or other URL of the image.')),
+      mode: z.enum(['faithful', 'sharp', 'editorial']).default('faithful'),
+      scale: z.number().int().min(2).max(4).default(2).describe('2 or 4 (×).'),
+      quote: z.boolean().default(false).describe('Only return sizes and credits for every mode × scale (free, nothing is saved).'),
+      productBox: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0).max(1), h: z.number().min(0).max(1) }).optional()
+        .describe('Where the product is, fractions of width/height: the fidelity gate measures that region strictly.'),
+      filename: z.string().optional().describe('Name of the new asset in the gallery.'),
+      ...localOnly({ outputDir: z.string().optional().describe('Also download the result into this local directory.') }),
+    },
+    // spends credits (unless quote), adds a new asset
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, g(async (a) => {
+    if (a.scale !== 2 && a.scale !== 4) throw new VividApiError('scale must be 2 or 4', 400);
+    const src = await imageRef(a.source);
+    const imageUrl = src.url ?? `${client.apiUrl}/api/assets/${src.assetId}/download`;
+    if (a.quote) {
+      const { bytes } = await client.download(src.url ?? `/api/assets/${src.assetId}/download`);
+      const dims = readImageDimensions(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+      if (!dims) throw new VividApiError('cannot read the image size (JPEG, PNG or WebP only)', 400);
+      const { data } = await client.post<Record<string, unknown>>('/api/ai/upscale/quote', { width: dims.width, height: dims.height });
+      return json(data);
+    }
+    const { data } = await client.post<{ assetId: string } & Record<string, unknown>>('/api/ai/upscale', {
+      imageUrl, sourceAssetId: src.assetId, mode: a.mode, scale: a.scale, productBox: a.productBox, filename: a.filename,
+    });
+    const downloadUrl = await dl(data.assetId);
+    let path: string | undefined;
+    if (a.outputDir && io) {
+      const { bytes } = await client.download(`/api/assets/${data.assetId}/download`);
+      await io.mkdir(a.outputDir);
+      path = io.join(a.outputDir, `${(a.filename ?? 'upscale').replace(/\.[a-z0-9]+$/i, '')}_${data.assetId.slice(0, 8)}.png`);
+      await io.writeFile(path, bytes);
+    }
+    const out = openai ? pick(data, ['assetId', 'mode', 'creditsCost', 'width', 'height', 'factor', 'fallbackFrom']) : data;
+    return json({ ...out, downloadUrl, path });
+  }));
+
+  /** Video source → { assetId } or { url } the upscale endpoint accepts (own asset or /api/temp/ upload). */
+  async function videoRef(source: string): Promise<{ assetId?: string; url?: string }> {
+    if (ASSET_ID.test(source)) return { assetId: source };
+    const own = /\/api\/assets\/([a-f0-9]{32})\//i.exec(source);
+    if (own && isVividMedia(client, source)) return { assetId: own[1] };
+    // A VIVID temp upload: the API checks it belongs to this account.
+    if (!openai && /^https?:\/\//i.test(source) && new URL(source).origin === new URL(client.apiUrl).origin && source.includes('/api/temp/tmp/')) return { url: source };
+    if (openai) throw new VividApiError('source must be a video from the VIVID gallery (its asset id or downloadUrl from vivid_list_assets type=video)', 400);
+    return { url: (await client.tempUpload(source)).url };
+  }
+
+  server.registerTool('vivid_upscale_video', {
+    title: 'Upscale a video (faithful / sharp)',
+    description: 'Enlarge a video into a NEW video asset (the original is untouched). Modes: `faithful` (default — FLUX Video Upscale at creativity 0: keeps the product exactly as it is, softer; max 20 s, output 1080p or 2K, ~7 credits per output megapixel per second ≈ 14.5 cr/s at 1080p 9:16) or `sharp` (much crisper and ~10× cheaper, but reinterprets small detail such as stones, engravings or scenes inside glass; 1080p up to 60 s at 1.5 cr/s, 2K up to 30 s at 3 cr/s, 4K up to 20 s at 6 cr/s). Use faithful for jewellery and product close-ups, sharp for fashion, people and environments. Max 50 MB, MP4/MOV. Call with `quote: true` first: it returns every mode × resolution with exact credits and output size, or why an option is not available (e.g. a 28 s clip cannot go faithful). Credits are reserved at start and refunded if the provider fails. Takes 1–6 minutes: by default returns the jobId — poll with vivid_job_status.',
+    inputSchema: {
+      source: z.string().min(1).describe(openai
+        ? 'Asset id (32 hex) or downloadUrl of a video in the VIVID gallery.'
+        : L('Asset id (32 hex), VIVID URL, other URL or local file path of the video (uploaded for you).', 'Asset id (32 hex), VIVID URL or other URL of the video.')),
+      mode: z.enum(['faithful', 'sharp']).default('faithful'),
+      resolution: z.enum(['1080p', '2k', '4k']).default('1080p').describe('Target. faithful: 1080p or 2k. sharp: 1080p, 2k or 4k.'),
+      quote: z.boolean().default(false).describe('Only return the options with credits and output size (free, nothing starts).'),
+      projectId: z.string().optional(),
+      wait: z.boolean().default(false).describe('Block until the video is ready (polls up to timeoutSec).'),
+      timeoutSec: z.number().int().min(30).max(900).default(420),
+      ...localOnly({ outputDir: z.string().optional().describe('With wait: also download the result into this local directory.') }),
+    },
+    // spends credits (unless quote), adds a new asset
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, g(async (a) => {
+    const startedAt = Date.now();
+    const src = await videoRef(a.source);
+    if (a.quote) {
+      const { data } = await client.post<Record<string, unknown>>('/api/ai/upscale-video/quote', src);
+      return json(data);
+    }
+    const { data } = await client.post<{ jobId: string } & Record<string, unknown>>('/api/ai/upscale-video', {
+      ...src, mode: a.mode, resolution: a.resolution, projectId: a.projectId,
+    });
+    if (!a.wait) {
+      return json({ ...data, status: 'processing', hint: `Poll with vivid_job_status jobId=${data.jobId}.` });
+    }
+    const final = await pollUntilDone(
+      async () => (await client.get<JobStatus>(`/api/ai/video-status/${data.jobId}`)).data,
+      remaining(startedAt, a.timeoutSec), 10000,
+    );
+    let path: string | undefined;
+    if (final.status === 'completed' && final.assetId && a.outputDir && io) {
+      const { bytes } = await client.download(`/api/assets/${final.assetId}/download`);
+      await io.mkdir(a.outputDir);
+      path = io.join(a.outputDir, `upscale_${a.mode}_${a.resolution}_${final.assetId.slice(0, 8)}.mp4`);
+      await io.writeFile(path, bytes);
+    }
+    const done = final.status === 'completed' || final.status === 'failed' || final.status === 'cancelled';
+    return json({
+      ...data, status: final.status, assetId: final.assetId, downloadUrl: await dl(final.downloadUrl ?? final.assetId), error: final.error, path,
+      hint: done ? undefined : `Still upscaling (already paid): poll vivid_job_status jobId=${data.jobId} — do NOT start it again.`,
+    });
   }));
 
   server.registerTool('vivid_compare_product', {
